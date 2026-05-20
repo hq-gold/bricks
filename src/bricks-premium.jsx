@@ -3148,10 +3148,56 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   objectFit: "cover",
                 }}
               />
+              {/* soft top vignette + right edge fade into the text panel */}
               <div style={{
                 position: "absolute", inset: 0,
-                background: "linear-gradient(100deg, rgba(5,7,10,0) 55%, rgba(5,7,10,0.6) 100%)",
+                background: "linear-gradient(180deg, rgba(5,7,10,0.5) 0%, rgba(5,7,10,0.15) 35%, rgba(5,7,10,0.5) 100%), linear-gradient(100deg, rgba(5,7,10,0) 55%, rgba(5,7,10,0.6) 100%)",
               }} />
+              {/* live countdown — the dramatic centrepiece */}
+              <div style={{
+                position: "absolute", inset: 0,
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+                padding: "0 24px",
+              }}>
+                <div style={{
+                  fontSize: 10.5, letterSpacing: "0.22em", textTransform: "uppercase",
+                  color: "rgba(245,247,250,0.7)", fontWeight: 700,
+                  marginBottom: 10,
+                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
+                }}>
+                  Negative gearing cliff
+                </div>
+                <div className="cta-countdown" style={{
+                  fontFamily: 'ui-serif, Georgia, serif',
+                  fontSize: 64, fontWeight: 600, letterSpacing: "-0.04em",
+                  lineHeight: 1, color: "#FFFFFF",
+                  textShadow: "0 4px 24px rgba(0,0,0,0.7)",
+                }}>
+                  {daysUntilCliff}
+                </div>
+                <div style={{
+                  fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase",
+                  color: "rgba(245,247,250,0.85)", fontWeight: 600,
+                  marginTop: 6,
+                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
+                }}>
+                  days until 1 July 2027
+                </div>
+                <div style={{
+                  marginTop: 14, height: 1, width: 60,
+                  background: "linear-gradient(90deg, transparent, rgba(251,113,133,0.7), transparent)",
+                }} />
+                <div style={{
+                  marginTop: 10,
+                  fontSize: 11.5, lineHeight: 1.45,
+                  color: "rgba(245,247,250,0.7)", textAlign: "center",
+                  maxWidth: 240,
+                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
+                }}>
+                  When established property loses negative gearing.
+                </div>
+              </div>
             </div>
             {/* text half */}
             <div style={{ padding: "40px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
@@ -4497,18 +4543,24 @@ function SavedScreen({ properties, wishlist, onToggleWishlist, onOpen, onFindMor
 const VIDEO_SRC = "/budget-bg.mp4";
 
 function VideoBackdrop() {
+  // Track THIS page's scroll position (not the global doc) so the video
+  // scrubs cleanly from frame 1 (top of budget page) to last frame (bottom).
   const { scrollYProgress } = useScroll();
   const videoRef = useRef(null);
-  // subtle: 0.10 opacity at top → ~0.28 once scrolling, never overpowering
-  const videoOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.12, 0.30, 0.24]);
-  const scrimOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.90, 0.74, 0.80]);
+
+  // Visible, cinematic — the video is the hero of the page, not a faint backdrop.
+  // Slight opacity ramp so the very top frame eases in, then full visibility.
+  const videoOpacity = useTransform(scrollYProgress, [0, 0.05, 1], [0.85, 1, 1]);
+  // Lighter scrim — just enough that text stays readable over moving footage.
+  const scrimOpacity = useTransform(scrollYProgress, [0, 0.05, 1], [0.35, 0.45, 0.55]);
 
   // Scrub the video's playback time to match scroll position.
+  // Frame 1 at scroll=0, last frame at scroll=1.
   useEffect(() => {
     const unsub = scrollYProgress.on("change", (p) => {
       const v = videoRef.current;
       if (v && v.duration && isFinite(v.duration)) {
-        v.currentTime = Math.min(v.duration - 0.05, p * v.duration);
+        v.currentTime = Math.min(v.duration - 0.05, Math.max(0, p) * v.duration);
       }
     });
     return () => unsub();
@@ -4527,22 +4579,16 @@ function VideoBackdrop() {
           }}
         />
       ) : (
-        // placeholder — a Sydney-night-toned gradient, swapped out when VIDEO_SRC is set
         <motion.div style={{
           position: "absolute", inset: 0, opacity: videoOpacity,
-          background:
-            "linear-gradient(180deg, #0A1422 0%, #11141E 45%, #1A0E16 100%)",
+          background: "linear-gradient(180deg, #0A1422 0%, #11141E 45%, #1A0E16 100%)",
         }} />
       )}
-      {/* dark scrim — keeps foreground content readable over the video */}
+      {/* readability scrim — lighter so the video shows through */}
       <motion.div style={{
         position: "absolute", inset: 0,
-        background: "#05070A", opacity: scrimOpacity,
-      }} />
-      {/* gentle vignette */}
-      <div style={{
-        position: "absolute", inset: 0,
-        background: "radial-gradient(ellipse at center, transparent 35%, rgba(5,7,10,0.7) 100%)",
+        background: "linear-gradient(180deg, rgba(5,7,10,0.45) 0%, rgba(5,7,10,0.55) 50%, rgba(5,7,10,0.75) 100%)",
+        opacity: scrimOpacity,
       }} />
     </div>
   );
@@ -4581,13 +4627,7 @@ function AppInner() {
       WebkitFontSmoothing: "antialiased",
       color: "#F5F7FA",
     }}>
-      {/* ── VIDEO BACKDROP ──────────────────────────────────────────────────
-          Fixed full-screen video layer behind everything. Drop a real clip
-          (e.g. a Higgsfield "driving Sydney at night" file) into VIDEO_SRC
-          below — the layer reveals on scroll and stays subtle so foreground
-          content keeps its contrast. While VIDEO_SRC is empty, a gradient
-          stands in so the layout is identical to the final result. */}
-      <VideoBackdrop />
+      {/* Video backdrop now lives inside BudgetScreen — was leaking onto every screen */}
 
       <div style={{
         position: "fixed", inset: 0,
@@ -5019,6 +5059,95 @@ function AppInner() {
             justify-content: center !important;
             padding: 12px !important;
           }
+
+          /* ──────────────────────────────────────────────────────────────
+             COMPREHENSIVE MOBILE POLISH — final pass before VS Code handover
+             ────────────────────────────────────────────────────────────── */
+
+          /* Budget scene headlines — disable hard <br/> on mobile so text wraps naturally.
+             Marketing copy was line-broken for desktop poetry; mobile needs reflow. */
+          .bgt-h br { display: none !important; }
+          /* Mobile bgt-h: more breathing room than the existing 31px rule, with sane line height */
+          .bgt-h {
+            font-size: clamp(26px, 7vw, 32px) !important;
+            line-height: 1.18 !important;
+            letter-spacing: -0.025em !important;
+            padding: 0 4px !important;
+          }
+          .bgt-sub {
+            font-size: 15.5px !important;
+            line-height: 1.55 !important;
+            padding: 0 6px !important;
+          }
+
+          /* First budget scene clears the floating nav. Nav is fixed top:18 height:64
+             on mobile → bottom edge at ~82px. Add 110px so headline doesn't sit under it. */
+          #bgt-hero { padding-top: 110px !important; }
+
+          /* Home page hero headline — make the <br/> wrappers actually do their job */
+          .hero-h1 br,
+          .screen-h1 br {
+            /* hidden via the h1-break-desktop wrapper; leave default for safety */
+          }
+          /* Home page hero image — shorter on mobile so the headline isn't dwarfed */
+          .hero-header { margin-top: 100px !important; }
+
+          /* Drill-down video CTA — countdown clamp so the big 64px serif fits */
+          .cta-countdown {
+            font-size: clamp(40px, 12vw, 56px) !important;
+          }
+
+          /* Drill-down video CTA — minimum height on mobile (otherwise the
+             stacked layout collapses too tight) */
+          .cta-grid > div:first-child {
+            min-height: 220px !important;
+          }
+
+          /* Footer — proper spacing for mobile, readable bottom row */
+          footer {
+            margin-top: 56px !important;
+            padding-top: 32px !important;
+          }
+          .footer-grid {
+            grid-template-columns: 1fr 1fr !important;
+            gap: 28px !important;
+            margin-bottom: 32px !important;
+            padding: 0 4px !important;
+          }
+          .footer-grid > div:first-child {
+            grid-column: 1 / -1 !important;
+            margin-bottom: 8px !important;
+          }
+          .footer-grid h4,
+          .footer-grid > div > div:first-of-type {
+            font-size: 12.5px !important;
+            margin-bottom: 12px !important;
+          }
+          .footer-bottom {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 14px !important;
+            padding: 22px 4px 8px !important;
+            border-top: 1px solid rgba(255,255,255,0.06) !important;
+          }
+          .footer-bottom > div {
+            font-size: 11.5px !important;
+            line-height: 1.5 !important;
+            max-width: 100% !important;
+          }
+
+          /* Drill-down HomeCTABand panels — they use cta-grid which already stacks,
+             but tighten the panel padding for mobile breathing room */
+          .home-cta-band-panel {
+            padding: 22px 18px !important;
+          }
+        }
+
+        /* ─── EXTRA SMALL MOBILE — under 380px ─── */
+        @media (max-width: 380px) {
+          .bgt-h { font-size: clamp(22px, 6.8vw, 28px) !important; }
+          .cta-countdown { font-size: 38px !important; }
+          #bgt-hero { padding-top: 100px !important; }
         }
 
         /* ─── SMALL MOBILE — under 380px ─── */
@@ -5740,6 +5869,10 @@ function BudgetScreen({ onBrowse }) {
         marginBottom: -32,
         borderRadius: 0,
       }}>
+      {/* Scroll-scrubbed Sydney video — frame 1 at top of page, last frame at bottom.
+          Stays fixed full-viewport behind the scenes; readability scrim is built in. */}
+      <VideoBackdrop />
+
       {/* nav sits over the hero — give the first scene clearance */}
 
       {/* ─────────────────────────────────────────────────────────────────────
@@ -7949,9 +8082,11 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
           maxWidth: 1000,
         }}>
           <span className="h1-line1">Negative gearing just changed.</span>
-          <br/>
+          <span className="h1-break-desktop"><br/></span>
+          <span> </span>
           <span>See which beautiful listings</span>
-          <br/>
+          <span className="h1-break-desktop"><br/></span>
+          <span> </span>
           <span style={{
             fontStyle: "italic",
             fontWeight: 500,
