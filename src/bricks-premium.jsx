@@ -1274,7 +1274,7 @@ function ScaleToFit({ contentWidth, children }) {
   return (
     <div ref={wrapRef} style={{
       width: "100%", maxWidth: contentWidth,
-      height: innerH ?? undefined, overflow: "hidden",
+      height: innerH ?? undefined, overflow: "visible",
     }}>
       <div style={{
         width: contentWidth,
@@ -1419,8 +1419,8 @@ function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, anima
               top: 0,
             }}>
               <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={shouldAnimate ? { opacity: 1, y: 0 } : { opacity: 0, y: -10 }}
+                initial={animate ? { opacity: 0, y: -10 } : { opacity: 1, y: 0 }}
+                animate={shouldAnimate ? { opacity: 1, y: 0 } : (animate ? { opacity: 0, y: -10 } : { opacity: 1, y: 0 })}
                 transition={{
                   delay: PILL_DELAY,
                   duration: 0.4,
@@ -1432,7 +1432,7 @@ function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, anima
                 initial={{ opacity: 0 }}
                 animate={shouldAnimate ? {
                   opacity: [0, 0.30, 0.55, 0.30],
-                } : { opacity: 0 }}
+                } : (animate ? { opacity: 0 } : { opacity: 0.4 })}
                 transition={{
                   delay: PILL_DELAY + 0.4,
                   duration: 2.6,
@@ -1479,8 +1479,8 @@ function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, anima
         {/* The dropline — starts at bottom of pill, runs through entire grid height. Animates DOWN after pill drops. */}
         {breakEven && (
           <motion.div
-            initial={{ scaleY: 0, originY: 0, opacity: 0 }}
-            animate={shouldAnimate ? { scaleY: 1, opacity: 1 } : { scaleY: 0, opacity: 0 }}
+            initial={animate ? { scaleY: 0, originY: 0, opacity: 0 } : { scaleY: 1, opacity: 1 }}
+            animate={shouldAnimate ? { scaleY: 1, opacity: 1 } : (animate ? { scaleY: 0, opacity: 0 } : { scaleY: 1, opacity: 1 })}
             transition={{ delay: LINE_DELAY, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
             style={{
               position: "absolute",
@@ -1711,14 +1711,15 @@ function PropertyCard({ property, goals, onOpen, rank, daysUntilCliff, wishliste
         {rank && (
           <div style={{
             position: "absolute", top: 12, left: 12,
-            padding: "4px 10px", borderRadius: 999,
-            background: "linear-gradient(135deg, rgba(244,63,94,0.22) 0%, rgba(244,63,94,0.10) 100%)",
-            boxShadow: "0 1px 0 rgba(255,255,255,0.10) inset, 0 0 0 1px rgba(244,63,94,0.30) inset, 0 4px 14px -4px rgba(244,63,94,0.4)",
+            padding: "5px 11px", borderRadius: 999,
+            background: "rgba(10,12,16,0.92)",
+            boxShadow: "0 0 0 1px rgba(244,63,94,0.5) inset, 0 4px 14px -4px rgba(0,0,0,0.7)",
+            backdropFilter: "blur(4px)",
             display: "inline-flex", alignItems: "center", gap: 5,
             color: "#FB7185",
           }}>
-            <Zap size={9.5} strokeWidth={2.5} fill="#FB7185" />
-            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5 }}>
+            <Zap size={10} strokeWidth={2.5} fill="#FB7185" />
+            <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.4, color: "#FB7185" }}>
               #{rank.position} {rank.sortShort}
             </span>
           </div>
@@ -2068,10 +2069,11 @@ function Stat({ label, value, accent }) {
 
 // ─── DETAIL ROUTER ──────────────────────────────────────────────────────────
 
-function DetailScreen({ property, goals, onBack, onOpen, wishlisted, onToggleWishlist }) {
+function DetailScreen({ property, goals, onBack, onOpen, onOpenBudget, wishlisted, onToggleWishlist }) {
   return property.status === "owned"
     ? <OwnedDetail property={property} goals={goals} onBack={onBack} />
     : <ConsideringDetail property={property} goals={goals} onBack={onBack} onOpen={onOpen}
+        onOpenBudget={onOpenBudget}
         wishlisted={wishlisted} onToggleWishlist={onToggleWishlist} />;
 }
 
@@ -2234,7 +2236,7 @@ function EquityBrick({ equitySeries, cell = 13, gap = 3 }) {
 // ─── What-If card — a mini cashflow brick that responds to hypothetical wins ─
 // Pills apply a hypothetical improvement to the model. Framed as "what a better
 // deal would do" — never a promise that an agent/broker delivers a set figure.
-function WhatIfCard({ baseConfig, pills, accent }) {
+function WhatIfCard({ baseConfig, pills, accent, title, cell = 11 }) {
   // first pill active by default — the value shows immediately, no tap needed
   const [active, setActive] = useState(pills[0]?.id ?? null);
 
@@ -2256,43 +2258,54 @@ function WhatIfCard({ baseConfig, pills, accent }) {
 
   return (
     <div>
-      {/* mini cashflow brick — with the break-even "pays you from" line */}
-      <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", marginBottom: 14 }}>
-        <CashflowGrid cashflow={whatIfCf} cell={7} gap={1.5} animate={false}
-          milestones={whatIfMilestones} />
+      {/* title — names the property the projection is for */}
+      {title && (
+        <div style={{
+          fontSize: 12.5, color: "rgba(245,247,250,0.6)", fontWeight: 600,
+          marginBottom: 14, letterSpacing: "-0.01em",
+        }}>{title}</div>
+      )}
+
+      {/* the cashflow brick — full size, with the "pays you from" line + tags */}
+      <div style={{
+        display: "flex", justifyContent: "center", overflow: "visible",
+        paddingTop: 8, marginBottom: 18,
+      }}>
+        <CashflowGrid cashflow={whatIfCf} cell={cell} gap={2} animate={false}
+          milestones={whatIfMilestones} showLabels />
       </div>
 
       {/* outcome — time + money, the two that land */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 13 }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <div style={{
           flex: 1, background: "rgba(255,255,255,0.035)",
-          borderRadius: 11, padding: "11px 13px",
+          borderRadius: 12, padding: "13px 15px",
         }}>
-          <div style={{ fontSize: 9.5, color: "rgba(245,247,250,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div style={{ fontSize: 10, color: "rgba(245,247,250,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Time saved
           </div>
           <motion.div key={yearsOff}
             initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
-            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 19, fontWeight: 600, marginTop: 3, color: yearsOff > 0 ? accent : "#F5F7FA" }}>
+            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600, marginTop: 4, color: yearsOff > 0 ? accent : "#F5F7FA" }}>
             {yearsOff > 0 ? `${yearsOff} yr${yearsOff > 1 ? "s" : ""} sooner` : "—"}
           </motion.div>
         </div>
         <div style={{
           flex: 1, background: "rgba(255,255,255,0.035)",
-          borderRadius: 11, padding: "11px 13px",
+          borderRadius: 12, padding: "13px 15px",
         }}>
-          <div style={{ fontSize: 9.5, color: "rgba(245,247,250,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <div style={{ fontSize: 10, color: "rgba(245,247,250,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Money over 30 yrs
           </div>
           <motion.div key={lifeGain}
             initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
-            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 19, fontWeight: 600, marginTop: 3, color: lifeGain > 0 ? "#4ADE80" : "#F5F7FA" }}>
+            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600, marginTop: 4, color: lifeGain > 0 ? "#4ADE80" : "#F5F7FA" }}>
             {lifeGain !== 0 ? `${lifeGain >= 0 ? "+" : "−"}$${Math.abs(lifeGain).toLocaleString()}` : "—"}
           </motion.div>
         </div>
       </div>
 
-      {/* what-if pills */}
+      {/* what-if pills — refined: a quiet outlined set, the active one filled subtly */}
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
         {pills.map(p => {
           const on = active === p.id;
@@ -2300,18 +2313,18 @@ function WhatIfCard({ baseConfig, pills, accent }) {
             <button key={p.id}
               onClick={() => setActive(p.id)}
               style={{
-                cursor: "pointer", border: "none", borderRadius: 999,
-                padding: "8px 13px", fontSize: 11.5, fontWeight: 600,
-                background: on ? accent : "rgba(255,255,255,0.05)",
-                color: on ? "#0B0D12" : "rgba(245,247,250,0.7)",
-                boxShadow: on ? "none" : "0 0 0 1px rgba(255,255,255,0.09) inset",
+                cursor: "pointer", borderRadius: 999,
+                padding: "8px 14px", fontSize: 11.5, fontWeight: 600,
+                background: on ? "rgba(255,255,255,0.07)" : "transparent",
+                color: on ? "#F5F7FA" : "rgba(245,247,250,0.5)",
+                border: `1px solid ${on ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)"}`,
                 transition: "all 0.18s",
               }}>{p.label}</button>
           );
         })}
       </div>
       <div style={{
-        fontSize: 10, color: "rgba(245,247,250,0.34)", marginTop: 9, lineHeight: 1.4,
+        fontSize: 10.5, color: "rgba(245,247,250,0.34)", marginTop: 11, lineHeight: 1.4,
       }}>
         Hypothetical — what a better deal would do. Not a promise of a specific result.
       </div>
@@ -2319,7 +2332,7 @@ function WhatIfCard({ baseConfig, pills, accent }) {
   );
 }
 
-function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted, onToggleWishlist }) {
+function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudget, wishlisted, onToggleWishlist }) {
   const { days: daysUntilCliff } = useCountdown();
   const { openReferral } = useReferral();
 
@@ -2558,61 +2571,73 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
             {propIn.suburb} · {propIn.type}
           </div>
 
-          {/* photo gallery — big hero + thumbnail strip */}
+          {/* photo gallery — hero left, gallery grid right */}
           {(() => {
             const meta = propertyMeta(propIn);
             return (
               <>
-                <div style={{
-                  borderRadius: 18, overflow: "hidden", marginBottom: 8,
-                  position: "relative", background: "#15171F",
+                <div className="detail-gallery" style={{
+                  display: "grid", gridTemplateColumns: "1.45fr 1fr", gap: 10,
+                  marginBottom: 18,
                 }}>
-                  <PropertyHero property={propIn} height={300} />
-                  {/* price tag overlaid */}
+                  {/* hero */}
                   <div style={{
-                    position: "absolute", left: 16, bottom: 16,
-                    background: "rgba(5,7,10,0.82)", backdropFilter: "blur(8px)",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    borderRadius: 12, padding: "9px 16px",
+                    borderRadius: 18, overflow: "hidden",
+                    position: "relative", background: "#15171F",
+                    minHeight: 340,
                   }}>
+                    <PropertyHero property={propIn} height={340} />
                     <div style={{
-                      fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
-                      color: "rgba(245,247,250,0.5)", fontWeight: 600,
-                    }}>{propIn.build === "new" ? "From" : "Guide"}</div>
-                    <div style={{
-                      fontFamily: 'ui-serif, Georgia, serif', fontSize: 24, fontWeight: 600,
-                      color: "#F5F7FA",
-                    }}>{fmt0(vars.price)}</div>
-                  </div>
-                  {/* new-build / established badge */}
-                  <div style={{
-                    position: "absolute", right: 16, top: 16,
-                    background: isNew ? "rgba(34,197,94,0.9)" : "rgba(244,63,94,0.9)",
-                    borderRadius: 999, padding: "6px 13px",
-                    fontSize: 11.5, fontWeight: 700, color: "#FFFFFF",
-                    letterSpacing: -0.02,
-                  }}>{isNew ? "New build" : "Established"}</div>
-                </div>
-
-                {/* thumbnail strip */}
-                <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-                  {[0, 1, 2, 3].map(n => (
-                    <div key={n} style={{
-                      flex: 1, height: 64, borderRadius: 10, overflow: "hidden",
-                      background: "#15171F", opacity: n === 0 ? 1 : 0.5,
-                      position: "relative",
+                      position: "absolute", left: 16, bottom: 16,
+                      background: "rgba(5,7,10,0.82)", backdropFilter: "blur(8px)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      borderRadius: 12, padding: "9px 16px",
                     }}>
-                      <PropertyHero property={propIn} height={64} grayscale={false} />
-                      {n === 3 && (
-                        <div style={{
-                          position: "absolute", inset: 0,
-                          background: "rgba(5,7,10,0.7)",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 12, fontWeight: 700, color: "#F5F7FA",
-                        }}>+ Gallery</div>
-                      )}
+                      <div style={{
+                        fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+                        color: "rgba(245,247,250,0.5)", fontWeight: 600,
+                      }}>{propIn.build === "new" ? "From" : "Guide"}</div>
+                      <div style={{
+                        fontFamily: 'ui-serif, Georgia, serif', fontSize: 26, fontWeight: 600,
+                        color: "#F5F7FA",
+                      }}>{fmt0(vars.price)}</div>
                     </div>
-                  ))}
+                    <div style={{
+                      position: "absolute", right: 16, top: 16,
+                      background: isNew ? "rgba(34,197,94,0.9)" : "rgba(244,63,94,0.9)",
+                      borderRadius: 999, padding: "6px 13px",
+                      fontSize: 11.5, fontWeight: 700, color: "#FFFFFF",
+                      letterSpacing: -0.02,
+                    }}>{isNew ? "New build" : "Established"}</div>
+                  </div>
+                  {/* gallery 2×2 */}
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "1fr 1fr",
+                    gridTemplateRows: "1fr 1fr", gap: 10,
+                  }}>
+                    {[0, 1, 2, 3].map(n => (
+                      <div key={n} style={{
+                        borderRadius: 14, overflow: "hidden",
+                        background: "#15171F", position: "relative", minHeight: 162,
+                      }}>
+                        <PropertyHero property={propIn} height={162} />
+                        {n === 3 && (
+                          <div style={{
+                            position: "absolute", inset: 0,
+                            background: "rgba(5,7,10,0.72)",
+                            display: "flex", flexDirection: "column",
+                            alignItems: "center", justifyContent: "center", gap: 3,
+                            cursor: "pointer",
+                          }}>
+                            <Maximize2 size={16} color="#F5F7FA" strokeWidth={2} />
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: "#F5F7FA" }}>
+                              View gallery
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* key facts strip */}
@@ -2630,8 +2655,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
                       display: "inline-flex", alignItems: "center", gap: 7,
                       background: "rgba(255,255,255,0.04)",
                       border: "1px solid rgba(255,255,255,0.08)",
-                      borderRadius: 10, padding: "9px 13px",
-                      fontSize: 13, color: "rgba(245,247,250,0.8)", fontWeight: 500,
+                      borderRadius: 10, padding: "10px 14px",
+                      fontSize: 13.5, color: "rgba(245,247,250,0.8)", fontWeight: 500,
                     }}>
                       <f.icon size={14} strokeWidth={2} color="rgba(245,247,250,0.5)" />
                       {f.label}
@@ -2743,7 +2768,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
         <div style={{
           background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
           border: "1px solid rgba(255,255,255,0.10)",
-          borderRadius: 24, padding: "28px 24px", marginBottom: 26,
+          borderRadius: 24, padding: "36px 30px", marginTop: 56, marginBottom: 56,
         }}>
           <div style={{
             display: "flex", alignItems: "baseline", justifyContent: "space-between",
@@ -2810,8 +2835,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
           }}>
             {/* cashflow brick */}
             <div style={{
-              background: "rgba(255,255,255,0.02)", borderRadius: 18,
-              border: "1px solid rgba(255,255,255,0.06)", padding: "20px 18px",
+              background: "rgba(255,255,255,0.018)", borderRadius: 16,
+              border: "none", padding: "20px 18px",
             }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
                 Cashflow — what it costs you
@@ -2849,8 +2874,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
 
             {/* equity brick */}
             <div style={{
-              background: "rgba(255,255,255,0.02)", borderRadius: 18,
-              border: "1px solid rgba(255,255,255,0.06)", padding: "20px 18px",
+              background: "rgba(255,255,255,0.018)", borderRadius: 16,
+              border: "none", padding: "20px 18px",
               display: "flex", flexDirection: "column",
             }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
@@ -2884,8 +2909,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
 
           {/* SLIDERS — directly under the bricks so the link is obvious */}
           <div style={{
-            background: "rgba(255,255,255,0.02)", borderRadius: 18,
-            border: "1px solid rgba(255,255,255,0.06)", padding: "20px 18px",
+            background: "rgba(255,255,255,0.018)", borderRadius: 16,
+            border: "none", padding: "20px 18px",
             marginBottom: 14,
           }}>
             <div style={{
@@ -3072,7 +3097,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
         <div style={{
           background: "rgba(255,255,255,0.025)",
           border: "1px solid rgba(255,255,255,0.07)",
-          borderRadius: 24, padding: "30px 26px", marginBottom: 26,
+          borderRadius: 24, padding: "34px 30px", marginTop: 56, marginBottom: 56,
         }}>
           <div style={{
             fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
@@ -3102,43 +3127,65 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            ACT 2.7 — WHAT TO LOOK FOR (post-budget insight)
+            BUDGET CTA — looping Sydney video, half-width, links to budget
         ════════════════════════════════════════════════════════════════ */}
         <div style={{
           background: "rgba(255,255,255,0.025)",
           border: "1px solid rgba(255,255,255,0.07)",
-          borderRadius: 24, padding: "30px 26px", marginBottom: 26,
+          borderRadius: 24, overflow: "hidden",
+          marginTop: 56, marginBottom: 56,
         }}>
-          <div style={{
-            fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
-            color: "#FB7185", fontWeight: 600, marginBottom: 6,
-          }}>What changed for buyers in 2026</div>
-          <div style={{
-            fontFamily: 'ui-serif, Georgia, serif', fontSize: 24, fontWeight: 500,
-            color: "#F5F7FA", letterSpacing: "-0.02em", marginBottom: 22, lineHeight: 1.2,
+          <div className="cta-grid" style={{
+            display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "stretch",
           }}>
-            Three things the budget changed
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {[
-              { n: "01", h: "Which side of the line it's on",
-                d: "New build keeps negative gearing; established loses it from July 2027. This single fact moves the 30-year cost by tens of thousands." },
-              { n: "02", h: "How long the red runs",
-                d: "Don't ask 'is it positive?' — ask 'how many years of my life does it cost first?' The Map answers that in one look." },
-              { n: "03", h: "What you'd give up elsewhere",
-                d: "Every property is the same money not spent on another. The comparison rows above are the real question — not this property alone." },
-            ].map(it => (
-              <div key={it.n} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <div style={{
-                  fontFamily: 'ui-serif, Georgia, serif', fontSize: 20, fontWeight: 600,
-                  color: "rgba(251,113,133,0.6)", flexShrink: 0, lineHeight: 1.1, minWidth: 28,
-                }}>{it.n}</div>
-                <div>
-                  <div style={{ fontSize: 15, color: "#F5F7FA", fontWeight: 600 }}>{it.h}</div>
-                  <div style={{ fontSize: 13.5, color: "rgba(245,247,250,0.58)", marginTop: 3, lineHeight: 1.5 }}>{it.d}</div>
-                </div>
+            {/* video half */}
+            <div style={{ position: "relative", minHeight: 280, background: "#0A0D12" }}>
+              <video
+                src="/budget-bg.mp4"
+                autoPlay muted loop playsInline
+                style={{
+                  position: "absolute", inset: 0, width: "100%", height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+              <div style={{
+                position: "absolute", inset: 0,
+                background: "linear-gradient(100deg, rgba(5,7,10,0) 55%, rgba(5,7,10,0.6) 100%)",
+              }} />
+            </div>
+            {/* text half */}
+            <div style={{ padding: "40px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div style={{
+                fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
+                color: "#FB7185", fontWeight: 600, marginBottom: 12,
+              }}>The 2026 budget</div>
+              <div style={{
+                fontFamily: 'ui-serif, Georgia, serif', fontSize: 30, fontWeight: 500,
+                color: "#F5F7FA", letterSpacing: "-0.025em", lineHeight: 1.18, marginBottom: 14,
+              }}>
+                The rules just changed. This is the story behind every number here.
               </div>
-            ))}
+              <p style={{
+                fontSize: 14.5, lineHeight: 1.6, color: "rgba(245,247,250,0.62)", margin: "0 0 24px",
+              }}>
+                Negative gearing, capital gains tax, the July 2027 cliff — the budget
+                rewrote what makes a property worth owning. Walk through what it means.
+              </p>
+              <motion.button
+                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                onClick={() => onOpenBudget && onOpenBudget()}
+                style={{
+                  cursor: "pointer", border: "none", alignSelf: "flex-start",
+                  background: "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)",
+                  color: "#FFFFFF", borderRadius: 13, padding: "14px 24px",
+                  fontSize: 14.5, fontWeight: 600, letterSpacing: -0.02,
+                  display: "inline-flex", alignItems: "center", gap: 9,
+                  boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset, 0 14px 34px -14px rgba(244,63,94,0.85)",
+                }}>
+                See the 2026 budget story
+                <ArrowRight size={16} strokeWidth={2.4} />
+              </motion.button>
+            </div>
           </div>
         </div>
 
@@ -3146,162 +3193,9 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, wishlisted
             ACT 4 — THE CLOSE: two equal CTAs, each copy + live what-if
         ════════════════════════════════════════════════════════════════ */}
 
-        {/* — BUYER'S AGENT — */}
-        <div style={{
-          background: "linear-gradient(165deg, rgba(244,63,94,0.14), rgba(251,146,60,0.04))",
-          border: "1px solid rgba(251,113,133,0.26)",
-          borderRadius: 24, padding: "30px 28px", marginTop: 26,
-        }}>
-          <div className="cta-grid" style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "center",
-          }}>
-            {/* left — the pitch */}
-            <div>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
-                color: "#FB7185", fontWeight: 600, marginBottom: 12,
-              }}>Buyer's agent</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 30, fontWeight: 500,
-                color: "#F5F7FA", letterSpacing: "-0.025em", lineHeight: 1.14, marginBottom: 12,
-              }}>
-                Even a small win here pulls years off — and adds real money.
-              </div>
-              <p style={{
-                fontSize: 14.5, lineHeight: 1.5, color: "rgba(245,247,250,0.7)", margin: "0 0 20px",
-              }}>
-                A buyer's agent negotiates the price and reaches stock you can't.
-                See what that does to your 30 years — then talk to one, free.
-              </p>
-
-              <motion.button
-                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={() => openReferral({
-                  kind: "agent", property: propIn,
-                  context: { breakEven, source: "detail-agent-cta" },
-                })}
-                style={{
-                  cursor: "pointer", border: "none",
-                  background: "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)",
-                  color: "#FFFFFF",
-                  borderRadius: 14, padding: "16px 26px",
-                  fontSize: 15.5, fontWeight: 600, letterSpacing: -0.02,
-                  display: "inline-flex", alignItems: "center", gap: 9,
-                  whiteSpace: "nowrap",
-                  boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset, 0 16px 38px -14px rgba(244,63,94,0.85)",
-                }}>
-                Match me with an agent — free
-                <ArrowRight size={17} strokeWidth={2.4} />
-              </motion.button>
-              <div style={{ marginTop: 10, fontSize: 12, color: "rgba(245,247,250,0.5)" }}>
-                No obligation · Vetted local specialists
-              </div>
-            </div>
-
-            {/* right — the live what-if */}
-            <div style={{
-              background: "rgba(0,0,0,0.34)", borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)", padding: "18px 16px",
-            }}>
-              <div style={{ fontSize: 12, color: "#F5F7FA", fontWeight: 600, marginBottom: 12 }}>
-                What a better buy would do →
-              </div>
-              <WhatIfCard
-                baseConfig={cfConfig}
-                accent="#FB7185"
-                pills={[
-                  { id: "price5", label: "5% better price",
-                    apply: c => ({ ...c, price: c.price * 0.95, yieldPct: c.yieldPct / 0.95 }) },
-                  { id: "price8", label: "8% better price",
-                    apply: c => ({ ...c, price: c.price * 0.92, yieldPct: c.yieldPct / 0.92 }) },
-                  { id: "rent40", label: "$40/wk more rent",
-                    apply: c => ({ ...c, yieldPct: c.yieldPct + (40 * 52) / c.price * 100 }) },
-                  { id: "both", label: "Both levers combined",
-                    apply: c => ({ ...c, price: c.price * 0.92,
-                      yieldPct: (c.yieldPct / 0.92) + (40 * 52) / (c.price * 0.92) * 100 }) },
-                ]}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* — MORTGAGE BROKER — equal weight, equal structure — */}
-        <div style={{
-          background: "linear-gradient(165deg, rgba(96,165,250,0.13), rgba(96,165,250,0.03))",
-          border: "1px solid rgba(96,165,250,0.24)",
-          borderRadius: 24, padding: "30px 28px", marginTop: 18,
-        }}>
-          <div className="cta-grid" style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "center",
-          }}>
-            {/* left — the pitch */}
-            <div>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
-                color: "#93C5FD", fontWeight: 600, marginBottom: 12,
-              }}>Mortgage broker</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 30, fontWeight: 500,
-                color: "#F5F7FA", letterSpacing: "-0.025em", lineHeight: 1.14, marginBottom: 12,
-              }}>
-                Even a small rate win saves tens of thousands — and years.
-              </div>
-              <p style={{
-                fontSize: 14.5, lineHeight: 1.5, color: "rgba(245,247,250,0.7)", margin: "0 0 20px",
-              }}>
-                A broker hunts the rate and loan structure across the whole market.
-                A small win compounds for 30 years — see it, then talk to one, free.
-              </p>
-
-              <motion.button
-                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={() => openReferral({
-                  kind: "broker", property: propIn,
-                  context: { breakEven, source: "detail-broker-cta" },
-                })}
-                style={{
-                  cursor: "pointer", border: "none",
-                  background: "linear-gradient(135deg, #93C5FD 0%, #60A5FA 55%, #3B82F6 100%)",
-                  color: "#0B1220",
-                  borderRadius: 14, padding: "16px 26px",
-                  fontSize: 15.5, fontWeight: 700, letterSpacing: -0.02,
-                  display: "inline-flex", alignItems: "center", gap: 9,
-                  whiteSpace: "nowrap",
-                  boxShadow: "0 1px 0 rgba(255,255,255,0.3) inset, 0 16px 38px -14px rgba(96,165,250,0.85)",
-                }}>
-                Match me with a broker — free
-                <ArrowRight size={17} strokeWidth={2.6} />
-              </motion.button>
-              <div style={{ marginTop: 10, fontSize: 12, color: "rgba(245,247,250,0.5)" }}>
-                No obligation · Compares 30+ lenders
-              </div>
-            </div>
-
-            {/* right — the live what-if */}
-            <div style={{
-              background: "rgba(0,0,0,0.34)", borderRadius: 16,
-              border: "1px solid rgba(255,255,255,0.08)", padding: "18px 16px",
-            }}>
-              <div style={{ fontSize: 12, color: "#F5F7FA", fontWeight: 600, marginBottom: 12 }}>
-                What a sharper loan would do →
-              </div>
-              <WhatIfCard
-                baseConfig={cfConfig}
-                accent="#93C5FD"
-                pills={[
-                  { id: "rate04", label: "0.4% lower rate",
-                    apply: c => ({ ...c, rate: Math.max(0.02, c.rate - 0.004) }) },
-                  { id: "rate08", label: "0.8% lower rate",
-                    apply: c => ({ ...c, rate: Math.max(0.02, c.rate - 0.008) }) },
-                  { id: "rate12", label: "1.2% lower rate",
-                    apply: c => ({ ...c, rate: Math.max(0.02, c.rate - 0.012) }) },
-                  { id: "deposit", label: "10% bigger deposit",
-                    apply: c => ({ ...c, deposit: Math.min(0.6, c.deposit + 0.10) }) },
-                ]}
-              />
-            </div>
-          </div>
-        </div>
+        {/* — AGENT + BROKER CTAs — using the same design as the home page —
+            HomeCTABand reads the same home design and renders it for THIS property */}
+        <HomeCTABand exampleProperty={propIn} />
 
       </div>
     </motion.div>
@@ -4597,24 +4491,36 @@ function SavedScreen({ properties, wishlist, onToggleWishlist, onOpen, onFindMor
 }
 
 
-// ─── Video backdrop — scroll-driven reveal, ready for a real clip ───────────
-// To go live: set VIDEO_SRC to a hosted video URL (mp4/webm). The layer
-// fades in slightly as the user scrolls and is held at low opacity + a dark
-// scrim so foreground text always stays readable.
-const VIDEO_SRC = ""; // ← drop the Higgsfield "Sydney at night" clip URL here
+// ─── Video backdrop — scroll-driven, behind the budget story ────────────────
+// The video lives in /public. As the user scrolls the page, the video's
+// playback position scrubs from start to finish — it "plays" on scroll.
+const VIDEO_SRC = "/budget-bg.mp4";
 
 function VideoBackdrop() {
   const { scrollYProgress } = useScroll();
-  // subtle: 0.10 opacity at top → 0.30 once scrolling, never overpowering
-  const videoOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.10, 0.28, 0.22]);
-  const scrimOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.92, 0.78, 0.82]);
+  const videoRef = useRef(null);
+  // subtle: 0.10 opacity at top → ~0.28 once scrolling, never overpowering
+  const videoOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.12, 0.30, 0.24]);
+  const scrimOpacity = useTransform(scrollYProgress, [0, 0.15, 1], [0.90, 0.74, 0.80]);
+
+  // Scrub the video's playback time to match scroll position.
+  useEffect(() => {
+    const unsub = scrollYProgress.on("change", (p) => {
+      const v = videoRef.current;
+      if (v && v.duration && isFinite(v.duration)) {
+        v.currentTime = Math.min(v.duration - 0.05, p * v.duration);
+      }
+    });
+    return () => unsub();
+  }, [scrollYProgress]);
 
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
       {VIDEO_SRC ? (
         <motion.video
+          ref={videoRef}
           src={VIDEO_SRC}
-          autoPlay muted loop playsInline
+          muted playsInline preload="auto"
           style={{
             position: "absolute", inset: 0, width: "100%", height: "100%",
             objectFit: "cover", opacity: videoOpacity,
@@ -4714,7 +4620,7 @@ function AppInner() {
                                          onOpen={handleOpen}
                                          onFindMore={() => setScreen("browse")} />}
             {screen === "home"     && <HomeScreen key="home" properties={properties} goals={goals} onOpen={handleOpen} />}
-            {screen === "detail"   && openProperty && <DetailScreen key="detail" property={openProperty} goals={goals} onBack={() => setScreen("browse")} onOpen={handleOpen} wishlisted={wishlist.has(openProperty.id)} onToggleWishlist={toggleWishlist} />}
+            {screen === "detail"   && openProperty && <DetailScreen key="detail" property={openProperty} goals={goals} onBack={() => setScreen("browse")} onOpen={handleOpen} onOpenBudget={() => setScreen("budget")} wishlisted={wishlist.has(openProperty.id)} onToggleWishlist={toggleWishlist} />}
             {screen === "budget"   && <BudgetScreen key="budget" onBrowse={() => setScreen("browse")} />}
             {screen === "legal"    && <LegalScreen key="legal" section={legalSection} />}
           </AnimatePresence>
@@ -4800,6 +4706,7 @@ function AppInner() {
           .compare-sliders { grid-template-columns: 1fr !important; }
           .studio-bricks { grid-template-columns: 1fr !important; }
           .cta-grid { grid-template-columns: 1fr !important; gap: 20px !important; }
+          .detail-gallery { grid-template-columns: 1fr !important; }
           .home-cta-band { grid-template-columns: 1fr !important; }
           .footer-grid { grid-template-columns: 1fr 1fr !important; gap: 24px !important; }
           .footer-bottom { flex-direction: column !important; align-items: flex-start !important; }
@@ -5313,14 +5220,11 @@ function TopNav({ active, onTab, onAdd, wishlistCount = 0 }) {
           className="top-nav-brand"
           style={{
             background: "none", border: "none", cursor: "pointer", padding: 0,
-            color: "#F5F7FA",
-            fontFamily: 'ui-serif, Georgia, "Times New Roman", serif',
-            fontSize: 24, fontWeight: 500, letterSpacing: "-0.03em",
-            display: "inline-flex", alignItems: "center", gap: 1,
-            whiteSpace: "nowrap",
+            display: "inline-flex", alignItems: "center",
             flex: 1,
           }}>
-          The Bricks<span style={{ color: "#F43F5E" }}>.</span>
+          <img src="/logo.png" alt="The Bricks"
+            style={{ height: 30, width: "auto", display: "block" }} />
         </button>
 
         {/* DESKTOP: centered tab cluster */}
@@ -7806,15 +7710,11 @@ function SiteFooter({ onTab, onLegal }) {
       }}>
         {/* brand block */}
         <div>
-          <div style={{
-            fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600,
-            color: "#F5F7FA", letterSpacing: "-0.02em",
-          }}>
-            The Bricks<span style={{ color: "#F43F5E" }}>.</span>
-          </div>
+          <img src="/logo.png" alt="The Bricks"
+            style={{ height: 28, width: "auto", display: "block" }} />
           <div style={{
             fontSize: 12.5, color: "rgba(245,247,250,0.5)", lineHeight: 1.55,
-            marginTop: 10, maxWidth: 230,
+            marginTop: 14, maxWidth: 230,
           }}>
             Australian property investment, modelled honestly — 30 years of
             after-tax cashflow on every property, post-2026 budget.
