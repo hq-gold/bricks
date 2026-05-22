@@ -1,0 +1,11 @@
+{
+  // Cloudflare Workers Static Assets — serves the Vite-built SPA out of /dist.
+  // Single-page-application mode routes unknown paths to index.html so the
+  // hash-router still works for direct deep links.
+  "name": "bricks",
+  "compatibility_date": "2025-01-15",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
