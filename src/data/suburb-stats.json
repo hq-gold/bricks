@@ -1,0 +1,189 @@
+{
+  "bondi": {
+    "name": "Bondi",
+    "state": "NSW",
+    "salesLast12m": 187,
+    "medianPrice": 2450000,
+    "medianGrowth10y": 4.2,
+    "medianYieldPct": 2.8,
+    "vacancyPct": 1.6,
+    "daApprovals24m": 42,
+    "suburbScore": 72
+  },
+  "surry-hills": {
+    "name": "Surry Hills",
+    "state": "NSW",
+    "salesLast12m": 214,
+    "medianPrice": 1185000,
+    "medianGrowth10y": 5.1,
+    "medianYieldPct": 3.4,
+    "vacancyPct": 1.9,
+    "daApprovals24m": 88,
+    "suburbScore": 68
+  },
+  "mascot": {
+    "name": "Mascot",
+    "state": "NSW",
+    "salesLast12m": 156,
+    "medianPrice": 895000,
+    "medianGrowth10y": 4.8,
+    "medianYieldPct": 4.0,
+    "vacancyPct": 1.4,
+    "daApprovals24m": 61,
+    "suburbScore": 74
+  },
+  "marrickville": {
+    "name": "Marrickville",
+    "state": "NSW",
+    "salesLast12m": 203,
+    "medianPrice": 1120000,
+    "medianGrowth10y": 5.8,
+    "medianYieldPct": 3.2,
+    "vacancyPct": 1.7,
+    "daApprovals24m": 54,
+    "suburbScore": 71
+  },
+  "mosman": {
+    "name": "Mosman",
+    "state": "NSW",
+    "salesLast12m": 98,
+    "medianPrice": 3850000,
+    "medianGrowth10y": 3.8,
+    "medianYieldPct": 2.4,
+    "vacancyPct": 1.2,
+    "daApprovals24m": 28,
+    "suburbScore": 65
+  },
+  "parramatta": {
+    "name": "Parramatta",
+    "state": "NSW",
+    "salesLast12m": 312,
+    "medianPrice": 720000,
+    "medianGrowth10y": 5.4,
+    "medianYieldPct": 4.2,
+    "vacancyPct": 2.1,
+    "daApprovals24m": 142,
+    "suburbScore": 76
+  },
+  "newtown": {
+    "name": "Newtown",
+    "state": "NSW",
+    "salesLast12m": 178,
+    "medianPrice": 985000,
+    "medianGrowth10y": 5.2,
+    "medianYieldPct": 3.5,
+    "vacancyPct": 1.8,
+    "daApprovals24m": 47,
+    "suburbScore": 70
+  },
+  "sunbury": {
+    "name": "Sunbury",
+    "state": "VIC",
+    "salesLast12m": 284,
+    "medianPrice": 615000,
+    "medianGrowth10y": 4.1,
+    "medianYieldPct": 4.2,
+    "vacancyPct": 2.3,
+    "daApprovals24m": 89,
+    "suburbScore": 73
+  },
+  "carlton": {
+    "name": "Carlton",
+    "state": "VIC",
+    "salesLast12m": 142,
+    "medianPrice": 820000,
+    "medianGrowth10y": 5.2,
+    "medianYieldPct": 3.6,
+    "vacancyPct": 2.0,
+    "daApprovals24m": 36,
+    "suburbScore": 69
+  },
+  "brunswick-east": {
+    "name": "Brunswick East",
+    "state": "VIC",
+    "salesLast12m": 167,
+    "medianPrice": 705000,
+    "medianGrowth10y": 6.1,
+    "medianYieldPct": 4.4,
+    "vacancyPct": 1.5,
+    "daApprovals24m": 33,
+    "suburbScore": 78
+  },
+  "bardon": {
+    "name": "Bardon",
+    "state": "QLD",
+    "salesLast12m": 94,
+    "medianPrice": 835000,
+    "medianGrowth10y": 6.8,
+    "medianYieldPct": 4.5,
+    "vacancyPct": 1.9,
+    "daApprovals24m": 22,
+    "suburbScore": 77
+  },
+  "toowong": {
+    "name": "Toowong",
+    "state": "QLD",
+    "salesLast12m": 128,
+    "medianPrice": 510000,
+    "medianGrowth10y": 7.3,
+    "medianYieldPct": 4.6,
+    "vacancyPct": 2.2,
+    "daApprovals24m": 41,
+    "suburbScore": 75
+  },
+  "mooloolaba": {
+    "name": "Mooloolaba",
+    "state": "QLD",
+    "salesLast12m": 112,
+    "medianPrice": 1050000,
+    "medianGrowth10y": 9.4,
+    "medianYieldPct": 4.1,
+    "vacancyPct": 2.8,
+    "daApprovals24m": 19,
+    "suburbScore": 80
+  },
+  "subiaco": {
+    "name": "Subiaco",
+    "state": "WA",
+    "salesLast12m": 118,
+    "medianPrice": 680000,
+    "medianGrowth10y": 8.2,
+    "medianYieldPct": 4.8,
+    "vacancyPct": 1.6,
+    "daApprovals24m": 24,
+    "suburbScore": 79
+  },
+  "cottesloe": {
+    "name": "Cottesloe",
+    "state": "WA",
+    "salesLast12m": 64,
+    "medianPrice": 1320000,
+    "medianGrowth10y": 6.5,
+    "medianYieldPct": 3.5,
+    "vacancyPct": 1.4,
+    "daApprovals24m": 11,
+    "suburbScore": 74
+  },
+  "adelaide": {
+    "name": "Adelaide",
+    "state": "SA",
+    "salesLast12m": 198,
+    "medianPrice": 580000,
+    "medianGrowth10y": 7.1,
+    "medianYieldPct": 5.0,
+    "vacancyPct": 2.4,
+    "daApprovals24m": 76,
+    "suburbScore": 77
+  },
+  "glenelg": {
+    "name": "Glenelg",
+    "state": "SA",
+    "salesLast12m": 86,
+    "medianPrice": 665000,
+    "medianGrowth10y": 5.4,
+    "medianYieldPct": 4.0,
+    "vacancyPct": 2.0,
+    "daApprovals24m": 18,
+    "suburbScore": 71
+  }
+}

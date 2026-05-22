@@ -6,16 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "extract:budget": "node scripts/extract-budget-frames.mjs"
   },
   "dependencies": {
     "framer-motion": "^11.0.0",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.383.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-leaflet": "^4.2.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
+    "ffmpeg-static": "^5.3.0",
     "vite": "^5.4.0"
   }
 }

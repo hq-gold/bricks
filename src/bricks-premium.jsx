@@ -1,4 +1,25 @@
-import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Suspense, lazy } from "react";
+import PropertyMap from "./PropertyMap.jsx";
+import { computeBricksScore } from "./scoring.js";
+import { getSuburbStats } from "./suburbData.js";
+import { getPropertyInsights, createScoringEngine } from "./propertyInsights.js";
+import { BadgeShelf } from "./components/Badge.jsx";
+import ShareStoryModal from "./components/ShareStoryModal.jsx";
+import { AgentShareHeader, AgentContactDock, ListingAgentPromo } from "./components/AgentShareChrome.jsx";
+import { parseRoute, navigateTo } from "./routing.js";
+import MethodologyScreen from "./screens/MethodologyScreen.jsx";
+import AgentPreviewScreen from "./screens/AgentPreviewScreen.jsx";
+import LeaderboardScreen from "./screens/LeaderboardScreen.jsx";
+import { DEMO_AGENT } from "./data/demo-agent.js";
+import { getListingAgent } from "./data/demo-agencies.js";
+import VendorReportForm from "./screens/VendorReportForm.jsx";
+
+// Budget scrollytelling page — ~1k lines of marketing scenes. Lazy-loaded
+// so the Research-first critical path stays small (saves ~50KB on first load,
+// and keeps the file Cursor has to parse much shorter).
+const BudgetScreen = lazy(() => import("./screens/BudgetScreen.jsx"));
+import MapScreen from "./screens/MapScreen.jsx";
+import { SortToolbar, SORT_OPTIONS } from "./components/SortToolbar.jsx";
 import { motion, AnimatePresence, useInView, useScroll, useTransform, useMotionValueEvent } from "framer-motion";
 import {
   Settings, Plus, ChevronLeft, TrendingUp, TrendingDown, ArrowDownRight, Minus, Home as HomeIcon,
@@ -8,7 +29,7 @@ import {
   Briefcase, Hammer, CheckCircle2, Check, Zap, Lock, Heart, Bookmark, Users,
   Bed, Bath, Car, Maximize2, Map as MapIcon, List as ListIcon,
   Search, Bell, BarChart3, Star, SlidersHorizontal,
-  Clock, Info, Menu as MenuIcon,
+  Clock, Info, Menu as MenuIcon, Trophy,
   Tag, Wallet, Percent, Banknote, LineChart, Receipt,
 } from "lucide-react";
 
@@ -158,342 +179,45 @@ const SEED_PROPS = [
 //   - ABS rent inflation series + KPMG outlook
 //   - CommBank housing outlook 14 May 2026
 
-const MODEL_DEFAULTS = Object.freeze({
-  rate: 0.066,             // RBA cycle: investor loan rates ~6.4-6.8% post May 2026 hike
-  deposit: 0.20,           // standard 80% LVR to avoid LMI
-  rentGrowth: 0.030,       // ABS long-term avg ~3%, KPMG fc 3.5%, conservative pick
-  vacancyWeeks: 2,         // industry standard 2wks/yr
-  loanType: "io",          // "io" | "pi" — IO is the standard investor choice
-  loanTermYears: 30,
-  // Cash holding costs (NOT including land tax, depreciation, interest, mortgage)
-  // House:     council ~$1.8k, insurance ~$1.5k, landlord ins ~$400, mgmt 7% of rent,
-  //            maintenance ~6% of rent. Total typically 1.5% of price + variable.
-  // Apartment: as above + strata ($4-7k/yr typical). Total typically 2.3% of price + variable.
-  cashCostsPctHouse: 0.013,        // ex rent-based items
-  cashCostsPctApartment: 0.022,    // ex rent-based items (incl. strata)
-  mgmtPctOfRent: 0.075,            // 7-8% metro
-  maintPctOfRent: 0.060,           // 5-10% buffer, pick midpoint
-  // Depreciation
-  constructionPctOfPrice: 0.55,    // typical land/build split (apt ~65%, house ~50%)
-  div40NewBuildBase: 0.035,        // 3.5% of price as Div 40 base for new build (industry ~$25-40k on $800k)
-  div40DiminishingRate: 0.20,      // 200% / 10yr effective life ≈ 20% diminishing avg
-  // Vacancy = 2 weeks of 52
-  vacancyFraction: 2 / 52,
+// Cashflow + tax engine (MODEL_DEFAULTS, generateCashflow, fmt, fmtFull,
+// calcAchievements, calcDollarMilestones, yearTurnsPositive, week1Cost,
+// cellSpectrum, ngBenefitValue) lives in src/core/cashflow.js — see header
+// of that file for the full formula documentation.
+//
+// Property helpers (propertyMeta, propertyListing, propertyTier,
+// propertyTypeKey, historicalGrowth10y, wealthCreated) live in
+// src/core/property.js.
+import {
+  MODEL_DEFAULTS,
+  generateCashflow,
+  calcAchievements,
+  fmt,
+  fmtFull,
+  cellSpectrum,
+  calcDollarMilestones,
+  yearTurnsPositive,
+  week1Cost,
+  ngBenefitValue,
+} from "./core/cashflow.js";
+import {
+  propertyMeta,
+  propertyListing,
+  propertyTier,
+  propertyTypeKey,
+  historicalGrowth10y,
+  wealthCreated,
+} from "./core/property.js";
+
+export const SCORING_ENGINE = createScoringEngine({
+  generateCashflow,
+  yearTurnsPositive,
+  ngBenefitValue,
 });
 
-// Land tax — annual, by state, on (estimated) unimproved land value.
-// Land value approximated as price × landFraction (varies by property type).
-function landTaxAnnual({ state, landValue }) {
-  // Simplified rate cards from state revenue offices (FY2025-26).
-  switch (state) {
-    case "NSW": {
-      if (landValue <= 1_075_000) return 0;
-      return 100 + 0.016 * (landValue - 1_075_000);
-    }
-    case "VIC": {
-      // Aggressive — threshold $50k, ratchets up quickly
-      if (landValue <= 50_000) return 0;
-      if (landValue <= 100_000) return 500;
-      if (landValue <= 300_000) return 975 + 0.001 * (landValue - 100_000);
-      if (landValue <= 600_000) return 1_350 + 0.006 * (landValue - 300_000);
-      if (landValue <= 1_000_000) return 3_150 + 0.009 * (landValue - 600_000);
-      return 6_750 + 0.024 * (landValue - 1_000_000);
-    }
-    case "QLD": {
-      if (landValue <= 600_000) return 0;
-      if (landValue <= 1_000_000) return 500 + 0.01 * (landValue - 600_000);
-      return 4_500 + 0.0165 * (landValue - 1_000_000);
-    }
-    case "SA": {
-      if (landValue <= 732_000) return 0;
-      if (landValue <= 1_176_000) return 0.005 * (landValue - 732_000);
-      return 2_220 + 0.015 * (landValue - 1_176_000);
-    }
-    case "WA": {
-      if (landValue <= 300_000) return 0;
-      if (landValue <= 420_000) return 300 + 0.0025 * (landValue - 300_000);
-      if (landValue <= 1_000_000) return 600 + 0.009 * (landValue - 420_000);
-      return 5_820 + 0.018 * (landValue - 1_000_000);
-    }
-    default: return 0;
-  }
-}
-
-// Approximate land fraction of price by property type (industry rule of thumb)
-function landFractionOf(property) {
-  const t = (property.type || "").toLowerCase();
-  if (t.includes("apartment") || t.includes("unit")) return 0.20;
-  if (t.includes("townhouse") || t.includes("terrace")) return 0.40;
-  return 0.55; // house/land
-}
-function isApartment(property) {
-  const t = (property.type || "").toLowerCase();
-  return t.includes("apartment") || t.includes("unit") || t.includes("walk-up") || t.includes("tower");
-}
-
-// Standard P&I monthly repayment formula
-function piMonthlyRepayment(loan, annualRate, years) {
-  const r = annualRate / 12;
-  const n = years * 12;
-  if (r === 0) return loan / n;
-  return loan * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-}
-
-// ── The main model ──────────────────────────────────────────────────────────
-function generateCashflow(input) {
-  // Accept either {price, yieldPct, ...} OR a property object directly via spread
-  const {
-    price, yieldPct, growthPct = 5,
-    rate = MODEL_DEFAULTS.rate,
-    deposit = MODEL_DEFAULTS.deposit,
-    marginalRate = 0.39,
-    build = "new",
-    state = "NSW",
-    months = 360,
-    loanType = MODEL_DEFAULTS.loanType,
-    type,                  // property type string — used for cost classification
-  } = input;
-  // Reconstruct a minimal "property" shape for downstream helpers
-  const property = { type, state, price, build };
-
-  const arr = [];
-  const loan = price * (1 - deposit);
-  const rentGrowth = MODEL_DEFAULTS.rentGrowth;
-  const vacancyAdj = 1 - MODEL_DEFAULTS.vacancyFraction;
-
-  // Property-type-aware holding cost base
-  const apt = isApartment(property);
-  const cashCostsPct = apt ? MODEL_DEFAULTS.cashCostsPctApartment : MODEL_DEFAULTS.cashCostsPctHouse;
-
-  // Land tax (annual, fixed — recalc'd here per scenario)
-  const landFr = landFractionOf(property);
-  const landValue = price * landFr;
-  const landTaxYr = landTaxAnnual({ state, landValue });
-
-  // Construction cost base for Div 43
-  const constructionCost = price * MODEL_DEFAULTS.constructionPctOfPrice;
-  const div43Annual = constructionCost * 0.025; // flat 2.5% for 40 years
-
-  // Div 40 base — new builds only (post-2017 rules deny Div 40 on existing purchases)
-  const div40Base = build === "new" ? price * MODEL_DEFAULTS.div40NewBuildBase : 0;
-
-  // Mortgage repayment (IO: interest only, no principal; P&I: amortises)
-  const piRepaymentM = piMonthlyRepayment(loan, rate, MODEL_DEFAULTS.loanTermYears);
-
-  // For P&I we track remaining balance
-  let loanBalance = loan;
-
-  // NG eligibility: NEW BUILDS retain full NG forever.
-  // EXISTING properties purchased post-12 May 2026: NG quarantined from 1 Jul 2027.
-  const ngAllowed = build === "new";
-
-  for (let m = 0; m < months; m++) {
-    const yr = m / 12;
-    const yearIdx = Math.floor(yr);
-
-    // Rent — grows annually with vacancy haircut
-    const annualGrossRent = price * (yieldPct / 100) * Math.pow(1 + rentGrowth, yr);
-    const annualNetRent = annualGrossRent * vacancyAdj;
-    const rentMonthly = annualNetRent / 12;
-
-    // Mortgage: interest on current balance, principal if P&I
-    const interestM = (loanBalance * rate) / 12;
-    let principalM = 0;
-    if (loanType === "pi") {
-      principalM = Math.max(0, piRepaymentM - interestM);
-      loanBalance = Math.max(0, loanBalance - principalM);
-    }
-
-    // Cash holding costs
-    const cashCostsMFixed = (price * cashCostsPct) / 12;
-    const cashCostsMRentLinked = (annualGrossRent * (MODEL_DEFAULTS.mgmtPctOfRent + MODEL_DEFAULTS.maintPctOfRent)) / 12;
-    const landTaxM = landTaxYr / 12;
-    const totalCashCostsM = cashCostsMFixed + cashCostsMRentLinked + landTaxM;
-
-    // Depreciation — non-cash, but creates tax shield
-    const div43M = (yearIdx < 40 ? div43Annual : 0) / 12;
-    // Div 40 (diminishing value method): annual deduction is rate × remaining balance.
-    // div40Base represents the initial asset value; deduction in year n is base × rate × (1-rate)^(n)
-    // (effective life ~10yr avg, so 200%/10 = 20% rate — matches BMT/Duotax industry data of
-    // $5-7k first-year deduction on a $500k apartment with ~$45k Div 40 assets).
-    const div40YearlyDeduction = div40Base * MODEL_DEFAULTS.div40DiminishingRate
-      * Math.pow(1 - MODEL_DEFAULTS.div40DiminishingRate, yearIdx);
-    const div40M = div40YearlyDeduction / 12;
-    const totalDepreciationM = div43M + div40M;
-
-    // Tax: rent vs (interest + cash costs + depreciation). Principal NOT deductible.
-    const taxableIncomeM = rentMonthly - interestM - totalCashCostsM - totalDepreciationM;
-    const taxBenefitM = (taxableIncomeM < 0 && ngAllowed)
-      ? (-taxableIncomeM) * marginalRate
-      : 0;
-    const taxOwedM = taxableIncomeM > 0
-      ? taxableIncomeM * marginalRate
-      : 0;
-
-    // Net cashflow: actual cash in/out + tax effect
-    const cashflowM =
-        rentMonthly
-      - interestM
-      - principalM
-      - totalCashCostsM
-      + taxBenefitM
-      - taxOwedM;
-
-    arr.push(cashflowM);
-  }
-  return arr;
-}
-function calcAchievements(cashflow, goals) {
-  return goals.map(goal => {
-    let yearHit = null;
-    if (goal.type === "yearly") {
-      for (let y = 1; y <= 30; y++) {
-        const annual = cashflow.slice((y - 1) * 12, y * 12).reduce((s, x) => s + x, 0);
-        if (annual >= goal.amount) { yearHit = y; break; }
-      }
-    } else {
-      let cum = 0;
-      for (let m = 0; m < 360; m++) {
-        cum += cashflow[m];
-        if (cum >= goal.amount) { yearHit = Math.ceil((m + 1) / 12); break; }
-      }
-    }
-    return { ...goal, yearHit };
-  });
-}
-function fmt(n) {
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1000) return `$${Math.round(n / 100) / 10}k`;
-  return `$${Math.round(n)}`;
-}
-function fmtFull(n) { return `$${Math.round(n).toLocaleString()}`; }
-function cellSpectrum(cf) {
-  // Monthly cashflow bands — wider negative range to reflect post-budget realities
-  // Existing apartment Y1 can be -$2.5k/mo; new build house Y1 is -$700/mo; thriving Y30 is +$1.5k/mo
-  if (cf <= -2000) return { color: "#7F1D1D", opacity: 1.0  };  // deep red — heavy bleeding
-  if (cf <= -1200) return { color: "#DC2626", opacity: 1.0  };  // bright red — bleeding
-  if (cf <=  -600) return { color: "#EF4444", opacity: 0.92 };  // red
-  if (cf <=  -200) return { color: "#F87171", opacity: 0.82 };  // light red — pinching
-  if (cf <=     0) return { color: "#FB923C", opacity: 0.78 };  // orange — near zero
-  if (cf <=   200) return { color: "#F59E0B", opacity: 0.88 };  // amber
-  if (cf <=   500) return { color: "#EAB308", opacity: 0.95 };  // gold
-  if (cf <=  1000) return { color: "#84CC16", opacity: 1.0  };  // lime
-  if (cf <=  1500) return { color: "#22C55E", opacity: 1.0  };  // bright green
-  return                  { color: "#10B981", opacity: 1.0  };  // emerald — thriving
-}
-
-// Find the year each monthly-cashflow milestone is first crossed.
-function calcDollarMilestones(cashflow) {
-  // Realistic monthly cashflow milestones — even thriving Y30 rarely exceeds $1.5k/mo
-  const targets = [0, 500, 1000, 1500]; // $0/mo break-even, $500/mo good, $1k/mo great, $1.5k/mo thriving
-  return targets.map(target => {
-    let yearHit = null;
-    for (let m = 0; m < cashflow.length; m++) {
-      if (cashflow[m] >= target) { yearHit = Math.ceil((m + 1) / 12); break; }
-    }
-    return { target, yearHit };
-  });
-}
-
-// When does the property turn cashflow-positive (cleanest single number for comparison)?
-function yearTurnsPositive(cashflow) {
-  for (let m = 0; m < cashflow.length; m++) {
-    if (cashflow[m] >= 0) return Math.ceil((m + 1) / 12);
-  }
-  return null;
-}
-
-// Weekly out-of-pocket cost in year 1 (avg if negative)
-function week1Cost(cashflow) {
-  const yr1 = cashflow.slice(0, 12).reduce((s, x) => s + x, 0);
-  return yr1 / 52;
-}
-
-// Dollar value of NG eligibility — what this property's status is worth over 30 years
-function ngBenefitValue(property) {
-  const cfNew = generateCashflow({ ...property, build: "new" });
-  const cfExisting = generateCashflow({ ...property, build: "existing" });
-  const sumNew = cfNew.reduce((s, x) => s + x, 0);
-  const sumExist = cfExisting.reduce((s, x) => s + x, 0);
-  return sumNew - sumExist;
-}
-
-// Composite ranking score — a single number for "how good is this property?"
-function bricksScore(property) {
-  const cf = generateCashflow(property);
-  const positiveYear = yearTurnsPositive(cf) || 30;
-  const c = property.confidence;
-
-  // Cashflow speed (25 pts) — break even by year 3 = full marks
-  const speedPts = Math.max(0, 25 - Math.max(0, positiveYear - 3) * 1.4);
-
-  // Confidence signals (35 pts total)
-  const growthPts = ((c?.growth?.score || 50) / 100) * 15;
-  const riskPts   = ((100 - (c?.risk?.score || 50)) / 100) * 10;
-  const liquidPts = ((c?.liquid?.score || 50) / 100) * 10;
-
-  // Tax shelter value (25 pts) — heavily favours new builds post-2027
-  const ngVal = ngBenefitValue(property);
-  const ngPts = Math.min(25, Math.max(0, ngVal / 8000));
-
-  // Capital growth (15 pts) — value multiple over 30 years
-  const yr30Multiplier = Math.pow(1 + property.growthPct / 100, 30);
-  const wealthPts = Math.min(15, (yr30Multiplier - 1) * 2.2);
-
-  return Math.round(speedPts + growthPts + riskPts + liquidPts + ngPts + wealthPts);
-}
-
-// Property quality tier — how a buyers agent would grade the stock
-function propertyTier(property) {
-  const c = property.confidence;
-  const liquid = c?.liquid?.score || 50;
-  const growth = c?.growth?.score || 50;
-
-  // Bluechip: established premium markets, deep buyer pool, stable growth
-  // Signals: high liquidity (≥75), moderate-to-strong growth (≥68), inner-suburb pricing
-  if (liquid >= 75 && growth >= 68 && property.price >= 700000) {
-    return { id: "bluechip", label: "Bluechip", desc: "Premium established suburb" };
-  }
-  // Growth: high momentum, riskier but bigger upside
-  if (property.growthPct >= 6.0) {
-    return { id: "growth", label: "Growth", desc: "High-momentum corridor" };
-  }
-  // Value: entry-level, yield-focused
-  if (property.price < 700000 || property.yieldPct >= 4.8) {
-    return { id: "value", label: "Value", desc: "Yield-focused entry" };
-  }
-  return { id: "balanced", label: "Balanced", desc: "Middle-of-road" };
-}
-
-// Compact property type for filtering
-function propertyTypeKey(property) {
-  const t = (property.type || "").toLowerCase();
-  if (t.includes("apartment") || t.includes("walk-up") || t.includes("unit") || t.includes("tower")) return "apartment";
-  if (t.includes("townhouse") || t.includes("terrace")) return "townhouse";
-  return "house";
-}
-
-// Plain-English tier from the score — what the USER actually sees
-function scoreTier(score) {
-  if (score >= 78) return { label: "TOP PICK",       color: "#10B981", bg: "rgba(16,185,129,0.18)",  border: "rgba(16,185,129,0.36)" };
-  if (score >= 64) return { label: "STRONG MATCH",   color: "#22C55E", bg: "rgba(34,197,94,0.16)",   border: "rgba(34,197,94,0.32)"  };
-  if (score >= 50) return { label: "WORTH A LOOK",   color: "#FACC15", bg: "rgba(250,204,21,0.14)",  border: "rgba(250,204,21,0.30)" };
-  if (score >= 38) return { label: "WEAKER",         color: "#FB923C", bg: "rgba(251,146,60,0.14)",  border: "rgba(251,146,60,0.30)" };
-  return              { label: "AVOID",          color: "#F43F5E", bg: "rgba(244,63,94,0.14)",   border: "rgba(244,63,94,0.30)"  };
-}
-
-// Total wealth created — the all-in upside number
-function wealthCreated(property) {
-  const cf = generateCashflow(property);
-  const yr30Value = property.price * Math.pow(1 + property.growthPct / 100, 30);
-  const totalCashflow = cf.reduce((s, x) => s + x, 0);
-  return yr30Value + totalCashflow - property.price;
-}
-
-// Historical 10-year suburb median growth (approximated from projected growth)
-function historicalGrowth10y(property) {
-  const historicalAnnual = property.growthPct * 0.85;
-  return (Math.pow(1 + historicalAnnual / 100, 10) - 1) * 100;
+/** Bricks Investment Grade Score — delegates to scoring.js */
+export function bricksScore(property) {
+  const st = getSuburbStats(property);
+  return computeBricksScore(property, st, SCORING_ENGINE).score;
 }
 
 // The corner badge — context-aware. All metrics are either documented math or historical.
@@ -553,6 +277,24 @@ const IMAGE_URLS = {
   22: "https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=900&q=80",  // Marrickville cottage
   23: "https://images.unsplash.com/photo-1554995207-c18c203602cb?w=900&q=80",     // Toowong walk-up
   24: "https://images.unsplash.com/photo-1502005229762-cf1b2da7c5d6?w=900&q=80",  // Glenelg
+  // Eastern Sydney public listings
+  31: "https://images.unsplash.com/photo-1567496898669-ee935f5f647a?w=900&q=80",  // Bondi penthouse
+  32: "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=900&q=80",  // Bronte garden apt
+  33: "https://images.unsplash.com/photo-1613490493576-7fde63acd811?w=900&q=80",  // Coogee terrace
+  34: "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=900&q=80",  // Paddington terrace
+  35: "https://images.unsplash.com/photo-1600585154526-990dced4db0d?w=900&q=80",  // Maroubra townhouse
+  36: "https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=900&q=80",  // Randwick apt
+  37: "https://images.unsplash.com/photo-1505691938895-1758d7feb511?w=900&q=80",  // Clovelly cottage
+  38: "https://images.unsplash.com/photo-1600210491892-03d54c0aaf87?w=900&q=80",  // Woollahra terrace
+  39: "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=900&q=80",     // Bellevue Hill apt
+  40: "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=900&q=80",  // Tamarama glass house
+  41: "https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=900&q=80",  // Bondi Junction tower
+  42: "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=900&q=80",     // Kingsford walk-up
+  43: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?w=900&q=80",  // Queens Park family
+  // Agent-preview private stock
+  51: "https://images.unsplash.com/photo-1613977257363-707ba9348227?w=900&q=80",  // Vaucluse family
+  52: "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=900&q=80",  // Double Bay garden apt
+  53: "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=900&q=80",     // Rose Bay new build
 };
 function getPropertyImage(property) {
   return IMAGE_URLS[property.id] || "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=900&q=80";
@@ -599,7 +341,7 @@ function getPropertyGallery(property) {
 }
 
 // Hero image component with gradient fallback always painted behind
-function PropertyHero({ property, height = 150, grayscale = false }) {
+export function PropertyHero({ property, height = 150, grayscale = false }) {
   const color = COLORS[property.color];
   return (
     <div style={{
@@ -626,111 +368,18 @@ function PropertyHero({ property, height = 150, grayscale = false }) {
   );
 }
 
-// Inferred metadata — beds/baths/year — derived from price and type so we don't retype data
-function propertyMeta(property) {
-  const t = (property.type || "").toLowerCase();
-  let beds = 2, baths = 1, parking = 1, area = 100;
-  if (t.includes("apartment") || t.includes("walk-up") || t.includes("unit") || t.includes("tower")) {
-    beds = property.price < 600000 ? 1 : property.price < 950000 ? 2 : 3;
-    baths = beds === 1 ? 1 : 2;
-    parking = beds === 1 ? 1 : 1;
-    area = beds * 35 + 20;
-  } else if (t.includes("townhouse") || t.includes("terrace")) {
-    beds = property.price < 700000 ? 2 : 3;
-    baths = beds === 2 ? 1.5 : 2;
-    parking = 1;
-    area = beds * 55 + 30;
-  } else if (t.includes("house") || t.includes("cottage") || t.includes("land")) {
-    beds = property.price < 700000 ? 3 : property.price < 1100000 ? 3 : 4;
-    baths = beds === 3 ? 2 : 3;
-    parking = 2;
-    area = 500 + (property.price / 4000);
-  }
-  let status = "";
-  if (property.build === "new") {
-    status = property.price > 1000000 ? "Ready Mar 2027" : "Off-the-plan · 2027";
-  } else {
-    status = t.includes("victorian") ? "c. 1890" :
-            t.includes("federation") ? "c. 1910" :
-            t.includes("1980") ? "Built 1985" :
-            t.includes("1990") ? "Built 1995" : "Pre-2000";
-  }
-  return { beds, baths, parking, area: Math.round(area), status };
-}
-
-// Listing detail — the "what you'd expect on a listing site" layer.
-// Derived from the data we hold so the prototype reads like a real listing;
-// in production these fields come from the scraped listing source.
-function propertyListing(property) {
-  const m = propertyMeta(property);
-  const isNew = property.build === "new";
-  const t = (property.type || "House").toLowerCase();
-  const suburb = (property.suburb || "").split(",")[0].trim();
-
-  // land size — houses/townhouses have land, apartments report internal only
-  const landSize = t.includes("apartment") || t.includes("unit")
-    ? null
-    : Math.round(m.area * (t.includes("town") ? 1.6 : 4.2) / 10) * 10;
-  const yearBuilt = isNew ? 2026 : property.price > 1100000 ? 1995 : 2008;
-
-  // a plain, factual description — no salesy adjectives, no advice
-  const desc = [
-    `A ${m.beds}-bedroom ${t} in ${suburb}, with ${m.baths} bathroom${m.baths === 1 ? "" : "s"} and ${m.parking} car space${m.parking === 1 ? "" : "s"}.`,
-    landSize
-      ? `Set on approximately ${landSize}m² of land, with ${m.area}m² of internal living area.`
-      : `Approximately ${m.area}m² of internal living area.`,
-    isNew
-      ? `Newly built (${yearBuilt}) and covered by builder's warranty — eligible for the new-build tax treatment under the 2026 budget.`
-      : `An established property (built ${yearBuilt}) — subject to the post-2027 negative gearing changes for established homes.`,
-  ];
-
-  // inspection slots — illustrative
-  const inspections = isNew
-    ? ["Display home open daily · 10:00am–4:00pm"]
-    : ["Saturday 11:00am–11:30am", "Wednesday 5:30pm–6:00pm"];
-
-  const features = [
-    `${m.beds} bedrooms`, `${m.baths} bathrooms`, `${m.parking} car spaces`,
-    landSize ? `${landSize}m² land` : `${m.area}m² internal`,
-    isNew ? "Builder's warranty" : `Built ${yearBuilt}`,
-    t.includes("apartment") ? "Strata title" : "Torrens title",
-  ];
-
-  return { landSize, yearBuilt, desc, inspections, features, area: m.area };
-}
-
-// Suburb coordinates for the map view — approximate lat/lon by state
-const SUBURB_COORDS = {
-  "Sunbury, VIC":        { lat: -37.58, lon: 144.72 },
-  "Surry Hills, NSW":    { lat: -33.88, lon: 151.21 },
-  "Bardon, QLD":         { lat: -27.46, lon: 152.97 },
-  "Subiaco, WA":         { lat: -31.95, lon: 115.83 },
-  "Mascot, NSW":         { lat: -33.93, lon: 151.19 },
-  "Brunswick East, VIC": { lat: -37.77, lon: 144.98 },
-  "Mooloolaba, QLD":     { lat: -26.68, lon: 153.12 },
-  "Adelaide, SA":        { lat: -34.93, lon: 138.60 },
-  "Cottesloe, WA":       { lat: -31.99, lon: 115.76 },
-  "Carlton, VIC":        { lat: -37.80, lon: 144.97 },
-  "Marrickville, NSW":   { lat: -33.91, lon: 151.16 },
-  "Toowong, QLD":        { lat: -27.48, lon: 152.99 },
-  "Glenelg, SA":         { lat: -34.98, lon: 138.51 },
-};
-
-// Live countdown to the negative-gearing-cliff (1 Jul 2027 00:00 AEST)
-function useCountdown() {
-  const target = new Date("2027-07-01T00:00:00+10:00").getTime();
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const diff = Math.max(0, target - now);
-  const days = Math.floor(diff / 86400000);
-  const hours = Math.floor((diff % 86400000) / 3600000);
-  const mins = Math.floor((diff % 3600000) / 60000);
-  const secs = Math.floor((diff % 60000) / 1000);
-  return { days, hours, mins, secs };
-}
+// SUBURB_COORDS, STATE_CENTER, EASTERN_SYDNEY_BOUNDS, getSuburbCoord
+//   → src/core/coords.js
+// useCountdown → src/hooks/useCountdown.js
+// Note: local aggregateBySuburb (line ~7200) is the rich variant that adds
+// avgBE / avgTax / build mix / score — kept inline.
+import {
+  SUBURB_COORDS,
+  STATE_CENTER,
+  EASTERN_SYDNEY_BOUNDS,
+  getSuburbCoord,
+} from "./core/coords.js";
+import { useCountdown } from "./hooks/useCountdown.js";
 function useAnimNum(target, dur = 900) {
   const [v, setV] = useState(target);
   const sT = useRef(0); const sV = useRef(target);
@@ -1267,14 +916,29 @@ function ScaleToFit({ contentWidth, children }) {
       if (childH) setInnerH(childH * s);
     };
     measure();
+    // ResizeObserver picks up parent-width changes that don't fire window resize
+    // (e.g. the drill-down sliding in, the side rail collapsing, etc).
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (ro && wrapRef.current) ro.observe(wrapRef.current);
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [contentWidth]);
 
   return (
     <div ref={wrapRef} style={{
       width: "100%", maxWidth: contentWidth,
-      height: innerH ?? undefined, overflow: "visible",
+      // CRITICAL: flex items default to min-width: auto (≥ content size). Without
+      // this override, flex parents will refuse to shrink us below the inner
+      // 388px brick and the grid bleeds off-screen on mobile.
+      minWidth: 0,
+      height: innerH ?? undefined,
+      // The unscaled inner div takes contentWidth of layout space even with
+      // transform: scale(<1). Clip horizontally so it can't overflow the parent
+      // panel, keep vertical visible so milestone pills above the grid stay drawn.
+      overflowX: "clip", overflowY: "visible",
     }}>
       <div style={{
         width: contentWidth,
@@ -1286,7 +950,7 @@ function ScaleToFit({ contentWidth, children }) {
   );
 }
 
-function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, animate = true, milestones = [], showLabels = false }) {
+export function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, animate = true, milestones = [], showLabels = false }) {
   // Scroll-trigger animations: only play when the grid enters the viewport.
   // Property cards below the fold otherwise miss their animation.
   const gridRef = useRef(null);
@@ -1667,7 +1331,7 @@ function CashflowGrid({ cashflow, cols = 30, rows = 12, cell = 8, gap = 2, anima
   );
 }
 
-function PropertyCard({ property, goals, onOpen, rank, daysUntilCliff, wishlisted, onToggleWishlist }) {
+function PropertyCard({ property, goals, onOpen, rank, daysUntilCliff, wishlisted, onToggleWishlist, topBadgeLabel }) {
   const cashflow = useMemo(() => generateCashflow(property), [property]);
   const baseMilestones = useMemo(() => calcDollarMilestones(cashflow), [cashflow]);
   // Y1 average monthly cost (negative cashflow) — adds a defensible "today" data point
@@ -1722,6 +1386,22 @@ function PropertyCard({ property, goals, onOpen, rank, daysUntilCliff, wishliste
             <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.4, color: "#FB7185" }}>
               #{rank.position} {rank.sortShort}
             </span>
+          </div>
+        )}
+        {topBadgeLabel && (
+          <div style={{
+            position: "absolute", bottom: 10, left: 12,
+            maxWidth: "calc(100% - 80px)",
+            fontSize: 9.5, fontWeight: 600, color: "rgba(245,247,250,0.75)",
+            padding: "4px 8px", borderRadius: 6,
+            background: "rgba(5,7,10,0.72)",
+            backdropFilter: "blur(6px)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            lineHeight: 1.3,
+            pointerEvents: "none",
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          }}>
+            {topBadgeLabel}
           </div>
         )}
         {onToggleWishlist && (
@@ -1786,6 +1466,7 @@ function PropertyCard({ property, goals, onOpen, rank, daysUntilCliff, wishliste
             {isNew ? "New build" : "Existing"}
           </span>
         </div>
+
       </div>
 
       {/* THE CASHFLOW GRID — the only place we let strong colour live */}
@@ -2266,9 +1947,11 @@ function WhatIfCard({ baseConfig, pills, accent, title, cell = 11 }) {
         }}>{title}</div>
       )}
 
-      {/* the cashflow brick — full size, with the "pays you from" line + tags */}
+      {/* the cashflow brick — full size, with the "pays you from" line + tags.
+          Block layout (not flex) so ScaleToFit's min-width:0 actually shrinks
+          the brick to fit narrow mobile panels rather than overflowing. */}
       <div style={{
-        display: "flex", justifyContent: "center", overflow: "visible",
+        width: "100%", overflowX: "clip", overflowY: "visible",
         paddingTop: 8, marginBottom: 18,
       }}>
         <CashflowGrid cashflow={whatIfCf} cell={cell} gap={2} animate={false}
@@ -2335,6 +2018,36 @@ function WhatIfCard({ baseConfig, pills, accent, title, cell = 11 }) {
 function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudget, wishlisted, onToggleWishlist }) {
   const { days: daysUntilCliff } = useCountdown();
   const { openReferral } = useReferral();
+  const [shareOpen, setShareOpen] = useState(false);
+
+  const isAgentPreview = propIn?.agentPreview === true || propIn?.source === "agent-preview";
+  const agent = propIn?.agent || DEMO_AGENT;
+  const listingAgent = useMemo(() => {
+    if (propIn?.agent?.name) return propIn.agent;
+    const a = getListingAgent(propIn);
+    return {
+      name: a.name,
+      agency: a.agency,
+      photo: a.photo,
+      phone: DEMO_AGENT.phone,
+      email: DEMO_AGENT.email,
+    };
+  }, [propIn]);
+
+  const detailInsights = useMemo(
+    () => getPropertyInsights(propIn, ALL_PROPS, SCORING_ENGINE),
+    [propIn],
+  );
+
+  // Where would this property rank vs live stock on the market? (Agent previews only.)
+  const marketInsights = useMemo(() => {
+    if (!isAgentPreview) return null;
+    const publicPool = ALL_PROPS.filter(
+      p => !(p.agentPreview || p.source === "agent-preview") && p.status !== "owned",
+    );
+    const pool = publicPool.some(p => p.id === propIn.id) ? publicPool : [...publicPool, propIn];
+    return getPropertyInsights(propIn, pool, SCORING_ENGINE);
+  }, [propIn, isAgentPreview]);
 
   // ── Editable assumptions — pre-filled with our best estimates ──────────────
   const [vars, setVars] = useState({
@@ -2516,14 +2229,204 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     <motion.div key={`detail-${propIn.id}`}
       initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 14 }}
       transition={{ duration: 0.26 }}
-      style={{ position: "relative", paddingBottom: 120 }}>
+      style={{ position: "relative", paddingBottom: isAgentPreview ? 96 : 96 }}>
 
-      <ScreenHeroBg height={420} />
+      {!isAgentPreview && <ScreenHeroBg height={420} />}
+      {isAgentPreview && (
+        <AgentShareHeader
+          agent={agent}
+          onBack={onBack}
+          backLabel="Back to preview list"
+        />
+      )}
 
       <div className="screen-content" style={{ position: "relative", zIndex: 1, padding: "0 24px" }}>
 
+        {/* ═══ AGENT SHARE VIEW — buyer/seller facing preview ═══ */}
+        {isAgentPreview && (
+          <>
+            <div style={{ paddingTop: 24, marginBottom: 28, maxWidth: 920, margin: "0 auto" }}>
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 18,
+                padding: "7px 14px", borderRadius: 999,
+                background: "rgba(96,165,250,0.1)",
+                border: "1px solid rgba(96,165,250,0.28)",
+                fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase",
+                color: "#BFDBFE",
+              }}>
+                <Lock size={12} strokeWidth={2.4} color="#93C5FD" />
+                Thinking of selling? · modelled preview
+              </div>
+
+              <div style={{
+                fontFamily: 'ui-serif, Georgia, serif', fontSize: 32, fontWeight: 500,
+                color: "#F5F7FA", letterSpacing: "-0.03em", lineHeight: 1.12, marginBottom: 8,
+              }}>
+                Where would your home rank if you listed today?
+              </div>
+              <div style={{ fontSize: 15, color: "rgba(245,247,250,0.55)", marginBottom: 6 }}>
+                {propIn.name} · {propIn.suburb}
+              </div>
+              <div style={{ fontSize: 13.5, color: "rgba(245,247,250,0.45)", marginBottom: 16, lineHeight: 1.5 }}>
+                Prepared by {agent.name} — show owners how compelling their listing would look to investors,
+                and why listing with you puts their property in the best light.
+              </div>
+
+              {marketInsights?.suburbRank != null && marketInsights.suburbTotal > 0 && (
+                <div style={{
+                  padding: "16px 18px", borderRadius: 16, marginBottom: 18,
+                  background: "linear-gradient(135deg, rgba(251,113,133,0.14) 0%, rgba(251,113,133,0.04) 100%)",
+                  border: "1px solid rgba(251,113,133,0.28)",
+                }}>
+                  <div style={{
+                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 28, fontWeight: 500,
+                    color: "#FB7185", letterSpacing: "-0.03em", lineHeight: 1.1,
+                  }}>
+                    Would rank #{marketInsights.suburbRank} of {marketInsights.suburbTotal} in {propIn.suburb.split(",")[0]}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 13.5, color: "rgba(245,247,250,0.65)", lineHeight: 1.5 }}>
+                    Modelled against properties currently on the market for investment — before this home goes live.
+                    {breakEven ? ` Breaks even year ${breakEven} on ${agent.name?.split(" ")[0] || "the agent"}'s assumptions.` : ""}
+                  </div>
+                </div>
+              )}
+
+              <div style={{
+                padding: "14px 16px", borderRadius: 12, marginBottom: 28,
+                background: "rgba(96,165,250,0.08)",
+                border: "1px solid rgba(96,165,250,0.22)",
+                display: "flex", alignItems: "flex-start", gap: 12,
+              }}>
+                <Info size={16} color="#93C5FD" strokeWidth={2.4} style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#BFDBFE", lineHeight: 1.35 }}>
+                    These numbers are modelled — put in your own assumptions below
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12.5, color: "rgba(245,247,250,0.6)", lineHeight: 1.5 }}>
+                    Built from {agent.name}&apos;s listing brief plus suburb stats and market data. Drag the levers to match your deposit, rate and tax bracket — then talk to {agent.name?.split(" ")[0]} about the real floorplan and rent appraisal.
+                  </div>
+                </div>
+              </div>
+
+              {/* Hero stats — the four numbers that matter */}
+              <div className="studio-strip" style={{
+                display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1,
+                background: "rgba(255,255,255,0.07)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 16, overflow: "hidden", marginBottom: 24,
+              }}>
+                {[
+                  { label: "Costs you now", value: `$${Math.round(Math.abs(y1Weekly))}`, unit: "per week", c: "#F87171" },
+                  { label: "Turns positive", value: breakEven ? `Yr ${breakEven}` : "Never", unit: breakEven ? "pays you from here" : "in 30 years", c: breakEven ? "#4ADE80" : "#F87171" },
+                  { label: "Wealth by yr 10", value: `$${Math.round(wealth10 / 1000)}k`, unit: "equity + cashflow", c: wealth10 >= 0 ? "#4ADE80" : "#F87171" },
+                  { label: "Owned by yr 30", value: `$${Math.round((equitySeries[29] || 0) / 1000)}k`, unit: "projected equity", c: "#93C5FD" },
+                ].map(s => (
+                  <div key={s.label} style={{ background: "#0B0D12", padding: "16px 10px", textAlign: "center" }}>
+                    <div style={{
+                      fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: "rgba(245,247,250,0.42)", fontWeight: 600, marginBottom: 7,
+                    }}>{s.label}</div>
+                    <div style={{
+                      fontFamily: 'ui-serif, Georgia, serif', fontSize: 24, fontWeight: 600,
+                      color: s.c, lineHeight: 1, letterSpacing: "-0.02em",
+                    }}>{s.value}</div>
+                    <div style={{ fontSize: 10, color: "rgba(245,247,250,0.45)", marginTop: 5 }}>{s.unit}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* THE 30-YEAR BRICK — hero, full width */}
+              <div style={{
+                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 20, padding: "24px 20px", marginBottom: 24,
+              }}>
+                <div style={{
+                  fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
+                  color: "#FB7185", fontWeight: 700, marginBottom: 6,
+                }}>
+                  30-year cashflow
+                </div>
+                <div style={{
+                  fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
+                  color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em",
+                }}>
+                  {breakEven
+                    ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEven}</span></>
+                    : <>Costs you every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
+                </div>
+                <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                  <CashflowGrid cashflow={cashflow} cell={10} gap={2.5}
+                    milestones={cashflowMilestones} showLabels={true} />
+                </div>
+                <div className="brick-callouts" style={{
+                  display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6,
+                  marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)",
+                }}>
+                  {brickCallouts.map(c => (
+                    <div key={c.year} style={{ textAlign: "center" }}>
+                      <div style={{ marginBottom: 4, display: "flex", justifyContent: "center" }}>
+                        <CalloutIcon kind={c.icon} size={15} />
+                      </div>
+                      <div style={{
+                        fontFamily: 'ui-serif, Georgia, serif', fontSize: 13, fontWeight: 600,
+                        color: c.amount >= 0 ? "#4ADE80" : "#F87171",
+                      }}>{c.value}</div>
+                      <div style={{ fontSize: 9, color: "rgba(245,247,250,0.45)", marginTop: 3 }}>Yr {c.year}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Equity growth — the sell story for vendors */}
+              <div style={{
+                background: "linear-gradient(180deg, rgba(147,197,253,0.08), rgba(255,255,255,0.015))",
+                border: "1px solid rgba(147,197,253,0.22)",
+                borderRadius: 20, padding: "24px 20px", marginBottom: 24,
+              }}>
+                <div style={{
+                  fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
+                  color: "#93C5FD", fontWeight: 700, marginBottom: 6,
+                }}>
+                  Capital growth · why this sells
+                </div>
+                <div style={{
+                  fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
+                  color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em", lineHeight: 1.25,
+                }}>
+                  Projected equity of{" "}
+                  <span style={{ color: "#93C5FD" }}>${Math.round((equitySeries[29] || 0) / 1000)}k</span>
+                  {" "}by year 30 — a story buyers want to hear
+                </div>
+                <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", marginBottom: 14 }}>
+                  <EquityBrick equitySeries={equitySeries} cell={9} gap={2} />
+                </div>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10,
+                  paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)",
+                }}>
+                  {[
+                    { label: "Equity year 10", value: `$${Math.round(wealth10 / 1000)}k` },
+                    { label: "Equity year 30", value: `$${Math.round((equitySeries[29] || 0) / 1000)}k` },
+                    { label: "Growth assumption", value: `${vars.growthPct}% p.a.` },
+                  ].map(s => (
+                    <div key={s.label} style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 9, color: "rgba(245,247,250,0.4)", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>{s.label}</div>
+                      <div style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 18, color: "#93C5FD", fontWeight: 600 }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <AgentContactDock agent={agent} propertyName={propIn.name} />
+          </>
+        )}
+
+        {/* ═══ STANDARD DETAIL — public listings ═══ */}
+        {!isAgentPreview && (
+        <>
         {/* ── HEADER ───────────────────────────────────────────────────── */}
-        <div style={{ paddingTop: 96, marginBottom: 30 }}>
+        <div className="detail-header-pad" style={{ paddingTop: 96, marginBottom: 30 }}>
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             gap: 12, marginBottom: 24,
@@ -2539,7 +2442,26 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               <ArrowLeft size={14} strokeWidth={2} /> All properties
             </button>
 
-            <motion.button
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              {detailInsights.badges.length > 0 && (
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => setShareOpen(true)}
+                  aria-label="Share on social"
+                  title="Share on social"
+                  style={{
+                    cursor: "pointer", borderRadius: 999,
+                    width: 40, height: 40,
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    color: "rgba(245,247,250,0.7)",
+                  }}>
+                  <Share2 size={16} strokeWidth={2.2} />
+                </motion.button>
+              )}
+              <motion.button
               whileTap={{ scale: 0.96 }}
               onClick={() => onToggleWishlist && onToggleWishlist(propIn.id)}
               style={{
@@ -2560,6 +2482,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 fill={wishlisted ? "#FFFFFF" : "none"} color={wishlisted ? "#FFFFFF" : "currentColor"} />
               {wishlisted ? "On your shortlist" : "Add to shortlist"}
             </motion.button>
+            </div>
           </div>
 
           {/* property name + location */}
@@ -2574,6 +2497,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
           {/* photo gallery — hero left, gallery grid right */}
           {(() => {
             const meta = propertyMeta(propIn);
+            const gallery = getPropertyGallery(propIn);
             return (
               <>
                 <div className="detail-gallery" style={{
@@ -2586,7 +2510,10 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                     position: "relative", background: "#15171F",
                     minHeight: 340,
                   }}>
-                    <PropertyHero property={propIn} height={340} />
+                    <img src={gallery[0]} alt={propIn.name}
+                      onError={(e) => { e.currentTarget.style.display = "none"; }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", minHeight: 340 }}
+                    />
                     <div style={{
                       position: "absolute", left: 16, bottom: 16,
                       background: "rgba(5,7,10,0.82)", backdropFilter: "blur(8px)",
@@ -2615,13 +2542,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                     display: "grid", gridTemplateColumns: "1fr 1fr",
                     gridTemplateRows: "1fr 1fr", gap: 10,
                   }}>
-                    {[0, 1, 2, 3].map(n => (
+                    {[1, 2, 3].map((n, i) => (
                       <div key={n} style={{
                         borderRadius: 14, overflow: "hidden",
                         background: "#15171F", position: "relative", minHeight: 162,
                       }}>
-                        <PropertyHero property={propIn} height={162} />
-                        {n === 3 && (
+                        <img src={gallery[n] || gallery[0]} alt={`${propIn.name} photo ${n + 1}`}
+                          onError={(e) => { e.currentTarget.style.display = "none"; }}
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", minHeight: 162 }}
+                        />
+                        {i === 2 && (
                           <div style={{
                             position: "absolute", inset: 0,
                             background: "rgba(5,7,10,0.72)",
@@ -2639,6 +2569,21 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                     ))}
                   </div>
                 </div>
+
+                <BadgeShelf
+                  badges={detailInsights.badges}
+                  score={detailInsights.score}
+                  suburbRank={detailInsights.suburbRank}
+                  suburbTotal={detailInsights.suburbTotal}
+                />
+                <ShareStoryModal
+                  open={shareOpen}
+                  onClose={() => setShareOpen(false)}
+                  property={propIn}
+                  insights={detailInsights}
+                  breakEven={breakEven}
+                  cashflow={cashflow}
+                />
 
                 {/* key facts strip */}
                 <div className="detail-facts" style={{
@@ -2664,31 +2609,35 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   ))}
                 </div>
 
-                {/* listing agent */}
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 13,
-                  background: "rgba(255,255,255,0.025)",
-                  border: "1px solid rgba(255,255,255,0.07)",
-                  borderRadius: 14, padding: "13px 16px",
-                }}>
+                {/* listing agent — compact row removed; see ListingAgentPromo below */}
+
+                {/* MODELED BANNER — only on agent-fed previews */}
+                {isAgentPreview && (
                   <div style={{
-                    width: 42, height: 42, borderRadius: 999, flexShrink: 0,
-                    background: "linear-gradient(135deg, #FB7185, #C9374F)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 16, fontWeight: 700, color: "#FFFFFF",
-                  }}>{(propIn.suburb || "B")[0]}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11, color: "rgba(245,247,250,0.45)", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      Listed by
+                    marginTop: 14,
+                    padding: "14px 16px",
+                    borderRadius: 12,
+                    background: "rgba(96,165,250,0.08)",
+                    border: "1px solid rgba(96,165,250,0.22)",
+                    display: "flex", alignItems: "flex-start", gap: 12,
+                  }}>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                      background: "rgba(96,165,250,0.18)",
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      <Info size={15} color="#93C5FD" strokeWidth={2.4} />
                     </div>
-                    <div style={{ fontSize: 14, color: "#F5F7FA", fontWeight: 600, marginTop: 1 }}>
-                      {isNew ? "Builder direct · display home open" : "Local agency · inspections weekly"}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#BFDBFE", lineHeight: 1.35 }}>
+                        These numbers are modelled — put in your own assumptions below
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 12.5, color: "rgba(245,247,250,0.6)", lineHeight: 1.5 }}>
+                        Use the Scenario Studio to set your deposit, rate, rent and tax bracket. Talk to {agent.name?.split(" ")[0] || "the agent"} about the specifics before you decide.
+                      </div>
                     </div>
                   </div>
-                  <div style={{
-                    fontSize: 12.5, color: "rgba(245,247,250,0.5)", flexShrink: 0,
-                  }}>Verified listing</div>
-                </div>
+                )}
 
                 {/* ── About this property — the listing detail ── */}
                 {(() => {
@@ -2761,6 +2710,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             );
           })()}
         </div>
+        </>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════
             THE SCENARIO STUDIO — sliders, big cashflow brick, equity curve
@@ -2768,7 +2719,9 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
         <div style={{
           background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
           border: "1px solid rgba(255,255,255,0.10)",
-          borderRadius: 24, padding: "36px 30px", marginTop: 56, marginBottom: 56,
+          borderRadius: 24, padding: "36px 30px",
+          marginTop: isAgentPreview ? 0 : 56,
+          marginBottom: isAgentPreview ? 32 : 56,
         }}>
           <div style={{
             display: "flex", alignItems: "baseline", justifyContent: "space-between",
@@ -2778,11 +2731,11 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               <div style={{
                 fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
                 color: "#FB7185", fontWeight: 600, marginBottom: 5,
-              }}>Scenario Studio</div>
+              }}>{isAgentPreview ? "Your assumptions" : "Scenario Studio"}</div>
               <div style={{
                 fontFamily: 'ui-serif, Georgia, serif', fontSize: 26, fontWeight: 500,
                 color: "#F5F7FA", letterSpacing: "-0.02em", lineHeight: 1.1,
-              }}>Play out the next 30 years</div>
+              }}>{isAgentPreview ? "Adjust the model to your situation" : "Play out the next 30 years"}</div>
             </div>
             {scenarioDirty && (
               <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -2797,7 +2750,9 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             )}
           </div>
 
-          {/* hero stat strip — calm row, no card clutter */}
+          {/* hero stat strip + bricks — public listings only (agent share shows these above) */}
+          {!isAgentPreview && (
+          <>
           <div className="studio-strip" style={{
             display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1,
             background: "rgba(255,255,255,0.07)",
@@ -2906,6 +2861,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               </div>
             </div>
           </div>
+          </>
+          )}
 
           {/* SLIDERS — directly under the bricks so the link is obvious */}
           <div style={{
@@ -2918,7 +2875,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             }}>
               <SlidersHorizontal size={15} color="#FB7185" strokeWidth={2.2} />
               <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA" }}>
-                Drag a lever — watch the brick above move
+                {isAgentPreview ? "Drag a lever — watch the 30-year picture change" : "Drag a lever — watch the brick above move"}
               </div>
             </div>
             <div style={{ fontSize: 11.5, color: "rgba(245,247,250,0.45)", marginBottom: 18 }}>
@@ -3017,6 +2974,27 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               </div>
             </div>
           </div>
+
+          {/* Agent share — live brick under sliders so changes are visible without scrolling up */}
+          {isAgentPreview && (
+            <div style={{
+              marginTop: 18, marginBottom: 14, padding: "18px 16px", borderRadius: 14,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.08)",
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#F5F7FA", marginBottom: 12 }}>
+                Updated 30-year view
+                {breakEven
+                  ? <span style={{ color: "#4ADE80", fontWeight: 500 }}> · pays you from year {breakEven}</span>
+                  : <span style={{ color: "#F87171", fontWeight: 500 }}> · never breaks even</span>}
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                <CashflowGrid cashflow={cashflow} cell={9} gap={2}
+                  milestones={cashflowMilestones} showLabels={true} />
+              </div>
+            </div>
+          )}
+
           {/* Excel export — calm spreadsheet treatment, subtle grid texture */}
           <div className="studio-export" style={{
             marginTop: 20, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)",
@@ -3056,41 +3034,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               Download my spreadsheet
             </motion.button>
           </div>
-
-          {/* Expert-help CTA — bridges the Studio into the referral path */}
-          <div style={{
-            marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: 14, flexWrap: "wrap",
-          }}>
-            <div style={{ minWidth: 200, flex: 1 }}>
-              <div style={{ fontSize: 14, color: "#F5F7FA", fontWeight: 600 }}>
-                Want someone to pressure-test this with you?
-              </div>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.55)", marginTop: 2, lineHeight: 1.45 }}>
-                Match with a buyer's agent or broker who can dig into this
-                property's numbers with you — free, no obligation.
-              </div>
-            </div>
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-              onClick={() => openReferral({
-                kind: "agent", property: propIn,
-                context: { breakEven, source: "scenario-studio" },
-              })}
-              style={{
-                cursor: "pointer", border: "none", flexShrink: 0,
-                background: "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)",
-                color: "#FFFFFF", borderRadius: 12, padding: "13px 20px",
-                fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap",
-                display: "inline-flex", alignItems: "center", gap: 8,
-                boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset, 0 12px 28px -12px rgba(244,63,94,0.8)",
-              }}>
-              <Users size={15} strokeWidth={2.2} />
-              Get an expert opinion
-            </motion.button>
-          </div>
         </div>
 
+        {isAgentPreview && (
+          <div style={{ maxWidth: 920, margin: "0 auto 32px" }}>
+            <PhotoGallery property={propIn} />
+          </div>
+        )}
+
+        {!isAgentPreview && (
+        <>
         {/* ════════════════════════════════════════════════════════════════
             ACT 2.5 — HOW IT COMPARES: 4 other real properties
         ════════════════════════════════════════════════════════════════ */}
@@ -3236,12 +3189,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            ACT 4 — THE CLOSE: two equal CTAs, each copy + live what-if
+            ACT 4 — LISTING AGENT
         ════════════════════════════════════════════════════════════════ */}
-
-        {/* — AGENT + BROKER CTAs — using the same design as the home page —
-            HomeCTABand reads the same home design and renders it for THIS property */}
-        <HomeCTABand exampleProperty={propIn} />
+        <ListingAgentPromo
+          agent={listingAgent}
+          propertyName={propIn.name}
+          suburb={propIn.suburb}
+        />
+        <AgentContactDock agent={listingAgent} propertyName={propIn.name} />
+        </>
+        )}
 
       </div>
     </motion.div>
@@ -4161,13 +4118,33 @@ function LegalScreen({ section = "terms" }) {
             documents reviewed by a qualified Australian legal practitioner
             before relying on them.
           </div>
+
+          {/* Map credits — required attribution for the OSM/Carto basemap and
+              the Leaflet renderer. We strip these from the map UI itself for a
+              cleaner explorer view; the credit lives here instead. */}
+          <div style={{
+            marginTop: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.04)",
+            fontSize: 11.5, color: "rgba(245,247,250,0.36)", lineHeight: 1.55,
+          }}>
+            <strong style={{ color: "rgba(245,247,250,0.55)", fontWeight: 600 }}>Map data &amp; attributions.</strong>{" "}
+            The property map is rendered with{" "}
+            <a href="https://leafletjs.com/" target="_blank" rel="noreferrer noopener"
+               style={{ color: "rgba(245,247,250,0.55)" }}>Leaflet</a>.
+            Basemap tiles &copy;{" "}
+            <a href="https://carto.com/attributions" target="_blank" rel="noreferrer noopener"
+               style={{ color: "rgba(245,247,250,0.55)" }}>CARTO</a>{" "}
+            using data from{" "}
+            <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer noopener"
+               style={{ color: "rgba(245,247,250,0.55)" }}>OpenStreetMap</a>{" "}
+            contributors, available under the Open Database License.
+          </div>
         </div>
       </div>
     </motion.div>
   );
 }
 
-function SettingsScreen() {
+function SettingsScreen({ onTab }) {
   return (
     <motion.div key="settings" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 16 }}
       transition={{ duration: 0.22 }}
@@ -4183,6 +4160,16 @@ function SettingsScreen() {
           textAlign: "center",
           display: "flex", flexDirection: "column", alignItems: "center",
         }}>
+          <button onClick={() => onTab?.("browse")}
+            style={{
+              marginBottom: 20, cursor: "pointer",
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 999, padding: "8px 14px", color: "rgba(245,247,250,0.7)",
+              display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500,
+            }}>
+            <ArrowLeft size={14} strokeWidth={2} /> Back
+          </button>
+
           <Eyebrow style={{ marginBottom: 28 }}>
             Your preferences · Bricks v0.3
           </Eyebrow>
@@ -4537,64 +4524,11 @@ function SavedScreen({ properties, wishlist, onToggleWishlist, onOpen, onFindMor
 }
 
 
-// ─── Video backdrop — scroll-driven, behind the budget story ────────────────
-// The video lives in /public. As the user scrolls the page, the video's
-// playback position scrubs from start to finish — it "plays" on scroll.
-const VIDEO_SRC = "/budget-bg.mp4";
-
-function VideoBackdrop() {
-  // Track THIS page's scroll position (not the global doc) so the video
-  // scrubs cleanly from frame 1 (top of budget page) to last frame (bottom).
-  const { scrollYProgress } = useScroll();
-  const videoRef = useRef(null);
-
-  // Visible, cinematic — the video is the hero of the page, not a faint backdrop.
-  // Slight opacity ramp so the very top frame eases in, then full visibility.
-  const videoOpacity = useTransform(scrollYProgress, [0, 0.05, 1], [0.85, 1, 1]);
-  // Lighter scrim — just enough that text stays readable over moving footage.
-  const scrimOpacity = useTransform(scrollYProgress, [0, 0.05, 1], [0.35, 0.45, 0.55]);
-
-  // Scrub the video's playback time to match scroll position.
-  // Frame 1 at scroll=0, last frame at scroll=1.
-  useEffect(() => {
-    const unsub = scrollYProgress.on("change", (p) => {
-      const v = videoRef.current;
-      if (v && v.duration && isFinite(v.duration)) {
-        v.currentTime = Math.min(v.duration - 0.05, Math.max(0, p) * v.duration);
-      }
-    });
-    return () => unsub();
-  }, [scrollYProgress]);
-
-  return (
-    <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
-      {VIDEO_SRC ? (
-        <motion.video
-          ref={videoRef}
-          src={VIDEO_SRC}
-          muted playsInline preload="auto"
-          style={{
-            position: "absolute", inset: 0, width: "100%", height: "100%",
-            objectFit: "cover", opacity: videoOpacity,
-          }}
-        />
-      ) : (
-        <motion.div style={{
-          position: "absolute", inset: 0, opacity: videoOpacity,
-          background: "linear-gradient(180deg, #0A1422 0%, #11141E 45%, #1A0E16 100%)",
-        }} />
-      )}
-      {/* readability scrim — lighter so the video shows through */}
-      <motion.div style={{
-        position: "absolute", inset: 0,
-        background: "linear-gradient(180deg, rgba(5,7,10,0.45) 0%, rgba(5,7,10,0.55) 50%, rgba(5,7,10,0.75) 100%)",
-        opacity: scrimOpacity,
-      }} />
-    </div>
-  );
-}
+// VideoBackdrop now lives inside src/screens/BudgetScreen.jsx — the only
+// page that uses it. The clip is in /public/budget-bg.mp4.
 
 function AppInner() {
+  const [route, setRoute] = useState(() => parseRoute());
   const [screen, setScreen] = useState("browse");
   const [legalSection, setLegalSection] = useState("terms");
   const [openId, setOpenId] = useState(null);
@@ -4603,8 +4537,46 @@ function AppInner() {
   const [goals, setGoals] = useState(SEED_GOALS);
   const [wishlist, setWishlist] = useState(new Set());
   const [bracket, setBracket] = useState("standard");
+  const [detailReturn, setDetailReturn] = useState("browse");
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const handleOpen = (id) => { setOpenId(id); setScreen("detail"); };
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const exitPublicRoute = () => {
+    navigateTo({ type: "app" });
+    setRoute({ type: "app" });
+  };
+
+  const handleOpen = (id) => {
+    exitPublicRoute();
+    setDetailReturn(screen);
+    setOpenId(id);
+    setScreen("detail");
+  };
+  const handleTab = (tab) => {
+    setMenuOpen(false);
+    if (tab === "report" || tab === "agent-preview") {
+      exitPublicRoute();
+      setScreen("agent-preview");
+      return;
+    }
+    if (tab === "methodology") {
+      navigateTo({ type: "methodology" });
+      setRoute(parseRoute());
+      return;
+    }
+    if (tab === "leaderboard") {
+      navigateTo({ type: "leaderboard", suburb: "overall" });
+      setRoute(parseRoute());
+      return;
+    }
+    exitPublicRoute();
+    setScreen(tab);
+  };
   const handleAdd = (np) => { setProperties(prev => [...prev, { ...np, id: Date.now() }]); setShowAdd(false); };
   const toggleWishlist = (id) => {
     setWishlist(prev => {
@@ -4614,11 +4586,65 @@ function AppInner() {
     });
   };
   const openProperty = properties.find(p => p.id === openId);
+  const isAgentShareView = openProperty?.agentPreview === true || openProperty?.source === "agent-preview";
+
+  const handleDetailBack = () => {
+    const dest = detailReturn && detailReturn !== "detail" ? detailReturn : "browse";
+    setOpenId(null);
+    setScreen(dest);
+  };
 
   // Every navigation lands at the top of the new screen
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, [screen, openId]);
+  }, [screen, openId, route.type]);
+
+  if (route.type === "methodology") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
+        <TopNav active="browse" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <MethodologyScreen onBack={exitPublicRoute} />
+        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+      </div>
+    );
+  }
+
+  if (route.type === "leaderboard") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
+        <TopNav active="leaderboard" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
+        <LeaderboardScreen
+          properties={properties}
+          initialSuburb={route.suburb || "overall"}
+          onBack={exitPublicRoute}
+          onOpenProperty={handleOpen}
+        />
+        <div className="bricks-web-content" style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px" }}>
+          <SiteFooter
+            onTab={handleTab}
+            onLegal={(sec) => { exitPublicRoute(); setLegalSection(sec); setScreen("legal"); }}
+            onMethodology={() => { navigateTo({ type: "methodology" }); setRoute(parseRoute()); }}
+          />
+        </div>
+        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+      </div>
+    );
+  }
+
+  if (route.type === "report-new") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
+        <TopNav active="browse" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <VendorReportForm
+          onBack={() => { exitPublicRoute(); setScreen("agent-preview"); }}
+          onSaved={(prop) => setProperties(prev => [...prev, prop])}
+          engine={SCORING_ENGINE}
+        />
+        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -4635,33 +4661,58 @@ function AppInner() {
         pointerEvents: "none",
       }} />
 
-      {/* TOP NAV — desktop floating pill */}
-      <TopNav active={screen} onTab={setScreen} onAdd={() => setShowAdd(true)} wishlistCount={wishlist.size} />
+      {/* TOP NAV — hidden on buyer-facing agent share pages */}
+      {!isAgentShareView && (
+        <TopNav active={screen} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+      )}
+      {!isAgentShareView && (
+        <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
+      )}
 
-      {/* MOBILE BOTTOM NAV — shown only on mobile via media query */}
-      <MobileBottomNav active={screen} onTab={setScreen} onAdd={() => setShowAdd(true)} wishlistCount={wishlist.size} />
+      {/* MOBILE BOTTOM NAV */}
+      {!isAgentShareView && (
+        <MobileBottomNav active={screen} onTab={handleTab} wishlistCount={wishlist.size} />
+      )}
 
       {/* Page content — centered single-column matching the app width.
           Same components as the mobile app, same flow, just no phone frame and a top nav. */}
-      <div className="bricks-web" style={{
-        position: "relative", zIndex: 1, width: "100%", maxWidth: 1400, minHeight: "100vh",
-        margin: "0 auto",
-        paddingTop: 56, paddingBottom: 32,
+      <div className={`bricks-web${isAgentShareView ? " agent-share-mode" : ""}`} style={{
+        position: "relative", zIndex: 1, width: "100%", minHeight: "100vh",
+        paddingTop: isAgentShareView ? 0 : 56,
+        paddingBottom: isAgentShareView ? 88 : 32,
       }}>
         <div style={{ position: "relative", minHeight: "calc(100vh - 56px)" }}>
           <AnimatePresence mode="wait">
-            {screen === "browse"   && <BrowseScreen key="browse" properties={properties} goals={goals}
+            {screen === "browse"   && <BrowseScreen key="browse-list" initialViewMode="list" properties={properties} goals={goals}
                                          wishlist={wishlist} onToggleWishlist={toggleWishlist}
                                          bracket={bracket} onBracket={setBracket}
-                                         onTab={setScreen}
-                                         onOpen={handleOpen} onOpenBudget={() => setScreen("budget")} />}
+                                         onTab={handleTab}
+                                         onOpen={handleOpen} onOpenBudget={() => handleTab("budget")} />}
+            {screen === "map"      && <BrowseScreen key="browse-map" initialViewMode="map" properties={properties} goals={goals}
+                                         wishlist={wishlist} onToggleWishlist={toggleWishlist}
+                                         bracket={bracket} onBracket={setBracket}
+                                         onTab={handleTab}
+                                         onOpen={handleOpen} onOpenBudget={() => handleTab("budget")} />}
             {screen === "saved"    && <SavedScreen key="saved" properties={properties} wishlist={wishlist}
                                          onToggleWishlist={toggleWishlist}
                                          onOpen={handleOpen}
-                                         onFindMore={() => setScreen("browse")} />}
+                                         onFindMore={() => handleTab("browse")} />}
             {screen === "home"     && <HomeScreen key="home" properties={properties} goals={goals} onOpen={handleOpen} />}
-            {screen === "detail"   && openProperty && <DetailScreen key="detail" property={openProperty} goals={goals} onBack={() => setScreen("browse")} onOpen={handleOpen} onOpenBudget={() => setScreen("budget")} wishlisted={wishlist.has(openProperty.id)} onToggleWishlist={toggleWishlist} />}
-            {screen === "budget"   && <BudgetScreen key="budget" onBrowse={() => setScreen("browse")} />}
+            {screen === "detail"   && openProperty && <DetailScreen key="detail" property={openProperty} goals={goals} onBack={handleDetailBack} onOpen={handleOpen} onOpenBudget={() => handleTab("budget")} wishlisted={wishlist.has(openProperty.id)} onToggleWishlist={toggleWishlist} />}
+            {screen === "budget" && (
+              <Suspense key="budget" fallback={<div style={{ minHeight: "60vh" }} />}>
+                <BudgetScreen onBrowse={() => handleTab("browse")} />
+              </Suspense>
+            )}
+            {screen === "agent-preview" && (
+              <AgentPreviewScreen
+                key="agent-preview"
+                properties={properties}
+                engine={SCORING_ENGINE}
+                onOpenProperty={handleOpen}
+              />
+            )}
+            {screen === "settings" && <SettingsScreen key="settings" onTab={handleTab} />}
             {screen === "legal"    && <LegalScreen key="legal" section={legalSection} />}
           </AnimatePresence>
           <AnimatePresence>
@@ -4669,18 +4720,184 @@ function AppInner() {
           </AnimatePresence>
         </div>
 
-        {/* Site footer — shown on every screen */}
-        <SiteFooter
-          onTab={setScreen}
-          onLegal={(sec) => { setLegalSection(sec); setScreen("legal"); }}
-        />
+        {/* Site footer — hidden on map and agent share pages */}
+        {screen !== "map" && !isAgentShareView && (
+          <div className="bricks-web-content" style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px" }}>
+            <SiteFooter
+              onTab={handleTab}
+              onLegal={(sec) => { setLegalSection(sec); setScreen("legal"); }}
+              onMethodology={() => { navigateTo({ type: "methodology" }); setRoute(parseRoute()); }}
+            />
+          </div>
+        )}
       </div>
 
       <style>{`
         html, body { margin: 0; background: #05070A; overflow-x: hidden; max-width: 100vw; }
         .bricks-web *::-webkit-scrollbar { display: none; }
         .bricks-web * { scrollbar-width: none; }
-        .bricks-web { overflow-x: hidden; max-width: 100vw; }
+        /* visible so full-bleed hero backgrounds can extend past the content column */
+        .bricks-web { overflow-x: visible; max-width: 100vw; }
+        .hero-bg-bleed { max-width: 100vw; }
+        .bricks-web .screen-content {
+          max-width: 1400px;
+          margin-left: auto;
+          margin-right: auto;
+          box-sizing: border-box;
+        }
+        .bracket-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 12px;
+          flex-shrink: 0;
+        }
+
+        /* ─── Leaflet property map ─── */
+        .property-map-shell .leaflet-container {
+          font-family: inherit;
+          z-index: 1;
+        }
+        .bricks-leaflet-marker {
+          background: transparent !important;
+          border: none !important;
+        }
+        /* Pin = a single dot. Heatmap colour set per-rank via the --pin-fill
+           CSS var; white label with a soft shadow stays legible across the
+           green→amber→red palette. */
+        .bricks-map-pin {
+          position: relative;
+          width: var(--pin-size);
+          height: var(--pin-size);
+          border-radius: 999px;
+          background: var(--pin-fill);
+          box-shadow:
+            0 0 0 1.5px var(--pin-ring) inset,
+            0 0 0 2px rgba(5,7,10,0.85),
+            0 4px 10px rgba(0,0,0,0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--pin-label, #FFFFFF);
+          letter-spacing: -0.02em;
+          line-height: 1;
+          transition: transform 0.18s ease;
+          /* Allow the floating caption to overflow the pin's iconSize bounds */
+          overflow: visible;
+        }
+        .bricks-map-pin > span {
+          text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+          z-index: 2;
+        }
+        .bricks-map-pin--selected {
+          transform: scale(1.12);
+          box-shadow:
+            0 0 0 2px #F5F7FA inset,
+            0 0 0 3px rgba(5,7,10,0.9),
+            0 0 18px color-mix(in srgb, var(--pin-fill) 70%, transparent);
+        }
+        /* Floating caption next to the top-3 pins — answers "what makes this
+           rank #1?" before the user clicks. Sits to the right of the pin with
+           a hairline ring matching the pin's fill so it visually belongs.
+           High z-index ensures the expanding ::before/::after pulse rings
+           cannot sweep on top of the caption mid-cycle. animation-fill-mode
+           "both" pins the caption to its end-state after the reveal so it
+           never re-disappears across pulse loops. */
+        .bricks-map-pin-caption {
+          position: absolute;
+          left: calc(var(--pin-size) + 8px);
+          top: 50%;
+          transform: translateY(-50%);
+          padding: 4px 9px;
+          border-radius: 7px;
+          font-size: 10.5px;
+          font-weight: 700;
+          letter-spacing: 0.02em;
+          color: #F5F7FA;
+          background: rgba(11,14,20,0.92);
+          backdrop-filter: blur(6px);
+          box-shadow:
+            0 0 0 1px var(--pin-fill) inset,
+            0 0 0 1px rgba(5,7,10,0.9),
+            0 6px 14px rgba(0,0,0,0.45);
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 12;
+          opacity: 1;
+        }
+        /* Gentle continuous pulse for top-3 — soft rings, slow cycle */
+        .bricks-map-pin--top::before,
+        .bricks-map-pin--top::after {
+          content: "";
+          position: absolute;
+          inset: -2px;
+          border-radius: 999px;
+          border: 2px solid var(--pin-fill);
+          opacity: 0;
+          pointer-events: none;
+          z-index: 0;
+          animation: bricks-pin-pulse 8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+        }
+        .bricks-map-pin--top::after {
+          animation-delay: 4s;
+        }
+        @keyframes bricks-pin-pulse {
+          0%   { transform: scale(0.85); opacity: 0;   }
+          12%  { opacity: 0.48; }
+          100% { transform: scale(2.15); opacity: 0;   }
+        }
+        /* One-shot soft glow on first map load only */
+        .bricks-map-pin--top-burst {
+          animation: bricks-pin-burst-glow 2.4s ease-out 1;
+        }
+        .bricks-map-pin--top-burst::before {
+          animation: bricks-pin-burst 2.6s cubic-bezier(0.22, 0.61, 0.36, 1) 1,
+                     bricks-pin-pulse 8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite 2.6s;
+        }
+        @keyframes bricks-pin-burst {
+          0%   { transform: scale(0.7); opacity: 0;    border-width: 2px; }
+          18%  { opacity: 0.35;                         border-width: 2px; }
+          100% { transform: scale(3.2); opacity: 0;    border-width: 1px; }
+        }
+        @keyframes bricks-pin-burst-glow {
+          0%   { box-shadow:
+                  0 0 0 1.5px var(--pin-ring) inset,
+                  0 0 0 2px rgba(5,7,10,0.85),
+                  0 0 0 0 var(--pin-fill); }
+          45%  { box-shadow:
+                  0 0 0 1.5px var(--pin-ring) inset,
+                  0 0 0 2px rgba(5,7,10,0.85),
+                  0 0 16px 4px color-mix(in srgb, var(--pin-fill) 45%, transparent); }
+          100% { box-shadow:
+                  0 0 0 1.5px var(--pin-ring) inset,
+                  0 0 0 2px rgba(5,7,10,0.85),
+                  0 4px 10px rgba(0,0,0,0.55); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .bricks-map-pin--top::before,
+          .bricks-map-pin--top::after,
+          .bricks-map-pin--top-burst::before,
+          .bricks-map-pin--top-burst { animation: none; }
+          .bricks-map-pin--top::before,
+          .bricks-map-pin--top::after { opacity: 0.35; transform: scale(1.45); }
+          .bricks-map-pin-caption { animation: none; }
+        }
+        /* Hide the default Leaflet attribution control entirely — our credit
+           lives in the legal/about screen. (Belt-and-braces alongside the
+           attributionControl={false} prop on MapContainer.) */
+        .property-map-shell .leaflet-control-attribution { display: none !important; }
+
+        /* Map popup — fixed to viewport so it never clips below the fold.
+           Position lives in CSS (not inline) so mobile overrides can apply. */
+        .map-card-popup {
+          position: fixed;
+          left: 50%;
+          bottom: max(80px, calc(72px + env(safe-area-inset-bottom, 0px)));
+          transform: translateX(-50%);
+          width: min(380px, calc(100vw - 28px));
+          max-height: min(calc(100dvh - 168px), calc(100dvh - 88px - 80px));
+        }
 
         /* ─── Studio range sliders ─── */
         .bricks-web input[type="range"] { -webkit-appearance: none; appearance: none; }
@@ -4741,7 +4958,13 @@ function AppInner() {
           /* ─── DETAIL PAGE — mobile ─── */
           .detail-stat-grid { grid-template-columns: 1fr !important; }
           .map-grid { gap: 4px !important; }
-          .detail-compare-grid { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+          /* Comparison cards full-width across the screen on mobile, not 2-up
+             squashed sidebar style. Big PropertyCard reads better one at a time. */
+          .detail-compare-grid { grid-template-columns: 1fr !important; gap: 14px !important; }
+          /* Drill-down hero — .bricks-web already adds 56px for nav. Trim the
+             extra 96px desktop pad to ~24px so the page doesn't open with a
+             large empty space above the back button on mobile. */
+          .detail-header-pad { padding-top: 24px !important; margin-bottom: 22px !important; }
           .studio-sliders { grid-template-columns: 1fr !important; }
           .compare-sliders { grid-template-columns: 1fr !important; }
           .studio-bricks { grid-template-columns: 1fr !important; }
@@ -4757,38 +4980,81 @@ function AppInner() {
           /* Hide floating map button — its function is in the footer strip on mobile */
           .floating-map { display: none !important; }
 
-          /* ─── TOP NAV — brand left, budget pill + menu right ─── */
-          .top-nav {
-            height: 64px !important;
-            border-radius: 18px !important;
-            padding: 0 12px 0 20px !important;
-            background: rgba(10,12,16,0.78) !important;
-            box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset,
-                        0 24px 60px -32px rgba(0,0,0,0.85) !important;
-            border: 1px solid rgba(255,255,255,0.08) !important;
+          /* ─── TOP NAV — full-width bar on mobile ─── */
+          .top-nav-shell {
+            top: 0 !important;
+            padding: 0 !important;
           }
-          /* Hide desktop nav items */
+          .top-nav {
+            height: 56px !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            border-radius: 0 !important;
+            padding: 0 10px 0 12px !important;
+            gap: 8px !important;
+            background: rgba(10,12,16,0.94) !important;
+            box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset !important;
+            border: none !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+          }
           .top-nav-tabs,
           .top-nav-spacer {
             display: none !important;
           }
-          /* Show mobile-only items */
           .top-nav-mobile-budget,
           .top-nav-mobile-menu {
             display: inline-flex !important;
           }
           .top-nav-brand {
-            font-size: 21px !important;
-            padding-right: 0 !important;
-            letter-spacing: -0.03em !important;
+            flex: 1 !important;
+            min-width: 0 !important;
+            justify-content: flex-start !important;
+            margin-right: 6px !important;
+          }
+          .top-nav-logo {
+            height: 22px !important;
+            max-width: 108px !important;
+            object-fit: contain !important;
+          }
+          .top-nav-mobile-budget {
+            margin-left: auto !important;
+          }
+          .mobile-menu-panel {
+            top: 60px !important;
           }
 
           /* ─── PAGE CONTAINER ─── */
           .bricks-web {
-            padding-top: 12px !important;
-            padding-bottom: 16px !important;
-            overflow-x: hidden !important;
+            padding-top: 56px !important;
+            padding-bottom: 0 !important;
+            overflow-x: visible !important;
             max-width: 100vw !important;
+          }
+          .browse-map-screen {
+            margin-top: 0 !important;
+            height: calc(100dvh - 56px - 58px) !important;
+            min-height: 360px !important;
+          }
+          .agent-share-mode {
+            padding-bottom: max(88px, calc(72px + env(safe-area-inset-bottom))) !important;
+          }
+          .agent-contact-dock {
+            padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
+          }
+          .map-card-popup {
+            bottom: max(68px, calc(58px + env(safe-area-inset-bottom))) !important;
+            max-height: min(calc(100dvh - 148px), calc(100dvh - 56px - 58px - 72px)) !important;
+          }
+          .floating-map-list {
+            bottom: max(72px, calc(62px + env(safe-area-inset-bottom))) !important;
+          }
+          /* Mobile: tighten the floating overlay (drop the sort-segment chrome
+             so it doesn't double up with the glass card it now sits inside) */
+          .map-controls-overlay .sort-segment {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 2px 0 !important;
           }
 
           /* ─── SCREEN CONTENT — 16px gutter, room for bottom nav ─── */
@@ -4822,11 +5088,16 @@ function AppInner() {
             width: 22px !important;
             flex-shrink: 0 !important;
           }
-          .hero-eyebrow > span:nth-child(2) {
+          .hero-eyebrow-text {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
             font-size: 10.5px !important;
             letter-spacing: 0.14em !important;
-            white-space: normal !important;
-            line-height: 1.5 !important;
+            line-height: 1.45 !important;
+          }
+          .hero-eyebrow .eyebrow-line {
+            display: block !important;
           }
 
           /* ─── H1 — bold serif, centered, breathing room ─── */
@@ -4845,9 +5116,28 @@ function AppInner() {
           .h1-break-desktop { display: none !important; }
           .h1-break-mobile { display: inline !important; }
           /* Italic accent — keep elegant weight on mobile */
+          .hero-h1 .h1-accent,
+          .screen-h1 .h1-accent,
           .hero-h1 span[style*="italic"],
           .screen-h1 span[style*="italic"] {
             font-weight: 500 !important;
+          }
+
+          /* ─── HERO BACKGROUND — zoom in so dunes read behind headline ─── */
+          .browse-hero-bg {
+            height: 500px !important;
+          }
+          .browse-hero-bg .hero-bg-image {
+            background-size: 145% auto !important;
+            background-position: center 58% !important;
+            opacity: 1 !important;
+          }
+          .browse-hero-bg .hero-bg-fade-top {
+            height: 56px !important;
+            background: linear-gradient(to bottom, rgba(5,7,10,0.28), transparent) !important;
+          }
+          .browse-hero-bg .hero-bg-vignette {
+            background: radial-gradient(ellipse 100% 55% at 50% 48%, rgba(244,63,94,0.10), transparent 68%), radial-gradient(ellipse 140% 80% at 50% 62%, transparent 62%, rgba(5,7,10,0.22) 100%) !important;
           }
           .detail-h1 {
             font-size: 30px !important;
@@ -4868,62 +5158,73 @@ function AppInner() {
             max-width: 94% !important;
           }
 
-          /* ─── BRACKET ROW — swipe row + full-width filters below ─── */
+          /* ─── BRACKET ROW — label wraps, search + filters on one line ─── */
           .bracket-row {
-            margin-bottom: 20px !important;
+            margin-bottom: 18px !important;
             margin-top: 8px !important;
             display: flex !important;
             flex-direction: column !important;
             align-items: stretch !important;
-            gap: 12px !important;
+            gap: 10px !important;
           }
           .bracket-panel {
-            width: auto !important;
-            display: flex !important;
-            flex-wrap: nowrap !important;
-            align-items: center !important;
-            gap: 8px !important;
-            padding: 4px 16px 12px !important;
-            margin: 0 -16px !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            overflow-x: auto !important;
-            max-width: 100vw !important;
-          }
-          .bracket-filter-btn {
             width: 100% !important;
+            display: flex !important;
+            flex-wrap: wrap !important;
+            align-items: center !important;
             justify-content: center !important;
-            padding: 13px 18px !important;
-            border-radius: 14px !important;
+            gap: 6px !important;
+            padding: 6px 10px !important;
+            margin: 0 !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,0.04) !important;
+            border: 1px solid rgba(255,255,255,0.08) !important;
+            box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset !important;
+            overflow: visible !important;
+            max-width: 100% !important;
           }
           .bracket-label {
-            padding: 0 4px 0 0 !important;
+            width: 100% !important;
+            padding: 2px 0 4px !important;
             font-size: 10px !important;
             font-weight: 600 !important;
             letter-spacing: 0.12em !important;
-            text-align: left !important;
-            display: flex !important;
-            align-items: center !important;
+            text-align: center !important;
+            display: block !important;
             color: rgba(245,247,250,0.5) !important;
-            white-space: nowrap !important;
-            flex-shrink: 0 !important;
+            white-space: normal !important;
           }
           .bracket-btn {
             flex-shrink: 0 !important;
-            padding: 9px 16px !important;
-            font-size: 13px !important;
+            padding: 8px 14px !important;
+            font-size: 12.5px !important;
             font-weight: 600 !important;
             text-align: center !important;
             border-radius: 999px !important;
           }
           .bracket-btn:not(.bracket-btn-active) {
-            background: rgba(255,255,255,0.03) !important;
-            box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset !important;
+            background: transparent !important;
+            box-shadow: none !important;
           }
           .bracket-btn-active {
             font-weight: 700 !important;
+          }
+          .bracket-actions {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            gap: 10px !important;
+            width: 100% !important;
+          }
+          .bracket-search-btn {
+            flex-shrink: 0 !important;
+          }
+          .bracket-filter-btn {
+            flex: 1 !important;
+            width: auto !important;
+            justify-content: center !important;
+            padding: 12px 16px !important;
+            border-radius: 999px !important;
           }
 
           /* ─── URGENCY STRIP — full-width, two-line content with chevron ─── */
@@ -4986,26 +5287,37 @@ function AppInner() {
             color: rgba(245,247,250,0.5) !important;
           }
 
-          /* ─── SORT ROW — segmented control scrolls horizontally ─── */
+          /* ─── SORT ROW — loose pills, no track/rail ─── */
           .sort-row {
             flex-wrap: nowrap !important;
             justify-content: flex-start !important;
             margin-bottom: 12px !important;
+            margin-left: -4px !important;
+            margin-right: -4px !important;
           }
           .sort-segment {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            gap: 8px !important;
             overflow-x: auto !important;
-            max-width: 100vw !important;
-            margin-left: -16px !important;
-            margin-right: -16px !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 2px 4px 6px !important;
             border-radius: 0 !important;
-            border-left: none !important;
-            border-right: none !important;
-            padding: 4px 16px !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
             scrollbar-width: none !important;
+            -webkit-overflow-scrolling: touch !important;
           }
           .sort-segment > button {
             flex-shrink: 0 !important;
             font-size: 12.5px !important;
+            padding: 9px 14px !important;
+          }
+          .sort-segment .sort-btn:not(.sort-btn-active) {
+            background: rgba(255,255,255,0.05) !important;
+            box-shadow: none !important;
           }
 
           /* ─── PROPERTY GRID — single column, edge-to-edge ─── */
@@ -5103,16 +5415,22 @@ function AppInner() {
             min-height: 220px !important;
           }
 
-          /* Footer — proper spacing for mobile, readable bottom row */
+          /* Footer — proper spacing for mobile, readable bottom row.
+             Left+right gutters match .screen-content; bottom pad clears the
+             fixed mobile-bottom-nav (~58px tall) plus iOS safe-area inset so
+             the legal disclaimer is never covered. */
           footer {
             margin-top: 56px !important;
             padding-top: 32px !important;
+            padding-left: 18px !important;
+            padding-right: 18px !important;
+            padding-bottom: max(96px, calc(64px + env(safe-area-inset-bottom))) !important;
           }
           .footer-grid {
             grid-template-columns: 1fr 1fr !important;
             gap: 28px !important;
             margin-bottom: 32px !important;
-            padding: 0 4px !important;
+            padding: 0 !important;
           }
           .footer-grid > div:first-child {
             grid-column: 1 / -1 !important;
@@ -5127,13 +5445,25 @@ function AppInner() {
             flex-direction: column !important;
             align-items: flex-start !important;
             gap: 14px !important;
-            padding: 22px 4px 8px !important;
+            padding: 22px 0 0 !important;
             border-top: 1px solid rgba(255,255,255,0.06) !important;
           }
           .footer-bottom > div {
             font-size: 11.5px !important;
             line-height: 1.5 !important;
             max-width: 100% !important;
+          }
+
+          .listing-agent-promo {
+            grid-template-columns: 1fr !important;
+          }
+          .listing-agent-promo > div:first-child {
+            border-right: none !important;
+            border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+            flex-direction: row !important;
+            gap: 16px !important;
+            padding: 20px !important;
+            min-width: 0 !important;
           }
 
           /* Drill-down HomeCTABand panels — they use cta-grid which already stacks,
@@ -5183,19 +5513,27 @@ function BenefitItem({ icon: Icon, title, sub, first }) {
   );
 }
 
+// Full-width hero background — spans the page, not just the centered content column
+const heroBgBleed = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  width: "100%",
+  pointerEvents: "none",
+  zIndex: 0,
+  overflow: "hidden",
+};
+
 // Shared hero background — same topographic atmosphere on every screen
 function ScreenHeroBg({ height = 580 }) {
   return (
-    <div style={{
-      position: "absolute", top: 0, left: 0, right: 0, height,
-      pointerEvents: "none", zIndex: 0,
-      overflow: "hidden",
-    }}>
+    <div className="hero-bg-bleed" style={{ ...heroBgBleed, height }}>
       <div style={{
         position: "absolute", inset: 0,
         backgroundImage: 'url("/the_bricks.png")',
         backgroundSize: "cover",
-        backgroundPosition: "center top",
+        backgroundPosition: "center bottom",
         opacity: 0.68,
       }} />
       <div style={{
@@ -5204,7 +5542,7 @@ function ScreenHeroBg({ height = 580 }) {
       }} />
       <div style={{
         position: "absolute", inset: 0,
-        background: "radial-gradient(ellipse 800px 500px at 50% 30%, rgba(244,63,94,0.05), transparent 65%), radial-gradient(ellipse 1200px 600px at 50% 35%, transparent 0%, rgba(5,7,10,0.55) 80%)",
+        background: "radial-gradient(ellipse 55% 65% at 50% 30%, rgba(244,63,94,0.05), transparent 70%), radial-gradient(ellipse 120% 90% at 50% 38%, transparent 45%, rgba(5,7,10,0.5) 100%)",
       }} />
       <div style={{
         position: "absolute", bottom: 0, left: 0, right: 0, height: 220,
@@ -5268,28 +5606,28 @@ function ScreenH1({ children, accent, fontSize = 64 }) {
   );
 }
 
-function MobileBottomNav({ active, onTab, onAdd, wishlistCount = 0 }) {
+function MobileBottomNav({ active, onTab, wishlistCount = 0 }) {
   return (
     <div className="mobile-bottom-nav" style={{
       position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50,
       display: "none",
-      padding: "0 16px calc(14px + env(safe-area-inset-bottom))",
+      padding: "0 10px max(4px, env(safe-area-inset-bottom))",
       pointerEvents: "none",
-      justifyContent: "center",
+      justifyContent: "stretch",
     }}>
-      <div style={{
+      <div className="mobile-bottom-nav-inner" style={{
         pointerEvents: "auto",
-        background: "rgba(10,12,16,0.88)",
+        width: "100%",
+        background: "rgba(10,12,16,0.92)",
         backdropFilter: "blur(20px) saturate(180%)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset, 0 -8px 32px -8px rgba(0,0,0,0.6)",
-        borderRadius: 999,
-        display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-        padding: "7px 8px",
+        borderTop: "1px solid rgba(255,255,255,0.08)",
+        boxShadow: "0 -12px 40px -12px rgba(0,0,0,0.65)",
+        display: "flex", alignItems: "stretch", justifyContent: "space-around",
+        padding: "6px 4px 8px",
       }}>
-        <MobileNavTab active={active === "browse"}   onClick={() => onTab("browse")}   Icon={Search}   label="Research" />
-        <MobileNavTab active={active === "saved"}    onClick={() => onTab("saved")}    Icon={Bookmark} label="Shortlist" badge={wishlistCount} />
-        <MobileNavTab active={active === "budget"}   onClick={() => onTab("budget")}   Icon={Zap}      label="Budget" />
+        <MobileNavTab active={active === "browse"} onClick={() => onTab("browse")} Icon={Search} label="Research" />
+        <MobileNavTab active={active === "saved"} onClick={() => onTab("saved")} Icon={Bookmark} label="Shortlist" badge={wishlistCount} />
+        <MobileNavTab active={active === "map"} onClick={() => onTab("map")} Icon={MapIcon} label="Map" />
       </div>
     </div>
   );
@@ -5299,20 +5637,28 @@ function MobileNavTab({ active, onClick, Icon, label, badge }) {
   return (
     <button onClick={onClick}
       style={{
-        background: active ? "rgba(244,63,94,0.12)" : "transparent",
+        background: "transparent",
         border: "none",
         cursor: "pointer",
-        padding: "8px 14px",
-        borderRadius: 999,
-        display: "flex", alignItems: "center", gap: 7,
-        color: active ? "#FECDD3" : "rgba(245,247,250,0.55)",
+        padding: "6px 10px",
+        borderRadius: 12,
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+        color: active ? "#FECDD3" : "rgba(245,247,250,0.5)",
         position: "relative",
         whiteSpace: "nowrap",
+        flex: 1,
+        minWidth: 0,
       }}>
-      <Icon size={16} strokeWidth={2}
+      <Icon size={18} strokeWidth={active ? 2.2 : 1.9}
         fill={active && label === "Shortlist" ? "#FB7185" : "none"}
-        color={active && label === "Shortlist" ? "#FB7185" : "currentColor"} />
-      <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, letterSpacing: -0.02 }}>{label}</span>
+        color={active ? "#FB7185" : "currentColor"} />
+      <span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500, letterSpacing: -0.01 }}>{label}</span>
+      {active && (
+        <span style={{
+          position: "absolute", top: 2, left: "50%", transform: "translateX(-50%)",
+          width: 20, height: 2, borderRadius: 99, background: "#FB7185",
+        }} />
+      )}
       {badge > 0 && (
         <span style={{
           background: "#FB7185", color: "#0B0D12",
@@ -5325,9 +5671,110 @@ function MobileNavTab({ active, onClick, Icon, label, badge }) {
   );
 }
 
-function TopNav({ active, onTab, onAdd, wishlistCount = 0 }) {
+function MobileMenu({ open, onClose, onTab, wishlistCount = 0 }) {
+  const items = [
+    { id: "browse", label: "Research properties", sub: "Ranked listings with 30-year cashflow", Icon: Search },
+    { id: "leaderboard", label: "Agency leaderboard", sub: "Suburb rankings · screenshot & share", Icon: Trophy },
+    { id: "map", label: "Property map", sub: "Suburb scores · tap markers to compare", Icon: MapIcon },
+    { id: "saved", label: "Your shortlist", sub: wishlistCount > 0 ? `${wishlistCount} saved for later` : "Bookmark properties to compare", Icon: Bookmark, badge: wishlistCount },
+    { id: "budget", label: "2026 tax & property rules", sub: "Negative gearing changes explained", Icon: FileText },
+    { id: "settings", label: "Settings", sub: "Tax bracket, loan rate & assumptions", Icon: Settings },
+  ];
+
   return (
-    <div style={{
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="menu-backdrop"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={onClose}
+            style={{
+              position: "fixed", inset: 0, zIndex: 80,
+              background: "rgba(3,5,8,0.72)", backdropFilter: "blur(8px)",
+            }}
+          />
+          <motion.div
+            key="menu-panel"
+            initial={{ opacity: 0, y: -12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.98 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="mobile-menu-panel"
+            style={{
+              position: "fixed", top: 12, left: 12, right: 12, zIndex: 90,
+              background: "linear-gradient(180deg, #12151C 0%, #0A0D12 100%)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              borderRadius: 20,
+              boxShadow: "0 24px 80px -20px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.06) inset",
+              padding: "16px 14px 14px",
+              maxHeight: "min(78vh, 520px)",
+              overflowY: "auto",
+            }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              marginBottom: 14, padding: "0 4px",
+            }}>
+              <div style={{ color: "#F5F7FA", fontSize: 15, fontWeight: 700, letterSpacing: -0.03 }}>
+                Menu
+              </div>
+              <button onClick={onClose} aria-label="Close menu"
+                style={{
+                  width: 36, height: 36, borderRadius: 12,
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)",
+                  color: "#F5F7FA", cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                <X size={18} strokeWidth={2.2} />
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {items.map(({ id, label, sub, Icon, badge }) => (
+                <button key={id}
+                  onClick={() => { onTab(id); onClose(); }}
+                  style={{
+                    cursor: "pointer", border: "1px solid rgba(255,255,255,0.06)",
+                    background: "rgba(255,255,255,0.03)",
+                    borderRadius: 14, padding: "12px 14px",
+                    display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+                  }}>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                    background: "rgba(244,63,94,0.10)",
+                    border: "1px solid rgba(244,63,94,0.18)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <Icon size={18} strokeWidth={2} color="#FB7185" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: "#F5F7FA", fontSize: 14, fontWeight: 600, letterSpacing: -0.02 }}>
+                      {label}
+                      {badge > 0 && (
+                        <span style={{
+                          marginLeft: 8, background: "#FB7185", color: "#0B0D12",
+                          fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 999,
+                        }}>{badge}</span>
+                      )}
+                    </div>
+                    <div style={{ color: "rgba(245,247,250,0.45)", fontSize: 11.5, marginTop: 2, lineHeight: 1.35 }}>
+                      {sub}
+                    </div>
+                  </div>
+                  <ChevronRight size={16} color="rgba(245,247,250,0.35)" strokeWidth={2} />
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
+  return (
+    <div className="top-nav-shell" style={{
       position: "fixed", top: 18, left: 0, right: 0, zIndex: 50,
       display: "flex", justifyContent: "center",
       pointerEvents: "none",
@@ -5352,15 +5799,16 @@ function TopNav({ active, onTab, onAdd, wishlistCount = 0 }) {
             display: "inline-flex", alignItems: "center",
             flex: 1,
           }}>
-          <img src="/logo.png" alt="The Bricks"
+          <img src="/logo.png" alt="The Bricks" className="top-nav-logo"
             style={{ height: 30, width: "auto", display: "block" }} />
         </button>
 
         {/* DESKTOP: centered tab cluster */}
         <div className="top-nav-tabs" style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <TopTab active={active === "browse"}   onClick={() => onTab("browse")}   Icon={Search}   label="Research" />
-          <TopTab active={active === "saved"}    onClick={() => onTab("saved")}    Icon={Bookmark} label="Shortlist" badge={wishlistCount} />
-          <TopTab active={active === "budget"}   onClick={() => onTab("budget")}   Icon={Zap}      label="Budget" />
+          <TopTab active={active === "browse"} onClick={() => onTab("browse")} Icon={Search} label="Research" />
+          <TopTab active={active === "map"} onClick={() => onTab("map")} Icon={MapIcon} label="Map" />
+          <TopTab active={active === "leaderboard"} onClick={() => onTab("leaderboard")} Icon={Trophy} label="Leaderboard" />
+          <TopTab active={active === "saved"} onClick={() => onTab("saved")} Icon={Bookmark} label="Shortlist" badge={wishlistCount} />
         </div>
 
         {/* DESKTOP: right side — budget learn-more pill + settings gear */}
@@ -5381,7 +5829,7 @@ function TopNav({ active, onTab, onAdd, wishlistCount = 0 }) {
               whiteSpace: "nowrap",
             }}>
             <FileText size={14} strokeWidth={2} color="#FB7185" />
-            <span>2026 negative gearing changes</span>
+            <span>2026 tax & property rules</span>
             <ArrowRight size={13} strokeWidth={2.2} color="rgba(254,205,211,0.7)" />
           </button>
         </div>
@@ -5396,29 +5844,35 @@ function TopNav({ active, onTab, onAdd, wishlistCount = 0 }) {
             boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(244,63,94,0.24) inset",
             color: "#FECDD3",
             border: "none",
-            borderRadius: 12,
-            padding: "10px 14px",
-            fontSize: 12.5, fontWeight: 600, letterSpacing: -0.05,
-            alignItems: "center", gap: 6,
+            borderRadius: 10,
+            padding: "8px 10px",
+            fontSize: 11, fontWeight: 600, letterSpacing: -0.03,
+            alignItems: "center", gap: 5,
             whiteSpace: "nowrap",
+            flexShrink: 1,
+            minWidth: 0,
+            maxWidth: "42vw",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}>
-          <FileText size={13} strokeWidth={2} color="#FB7185" />
-          2026 changes
+          <FileText size={12} strokeWidth={2} color="#FB7185" style={{ flexShrink: 0 }} />
+          <span className="top-nav-mobile-budget-label">2026 rules</span>
         </button>
 
         {/* MOBILE-ONLY: Menu icon — larger */}
         <button
-          onClick={() => onTab("settings")}
+          onClick={onMenuToggle}
           className="top-nav-mobile-menu"
           style={{
             cursor: "pointer",
             background: "rgba(255,255,255,0.04)",
             color: "#F5F7FA",
             border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 14,
-            width: 46, height: 46,
+            borderRadius: 12,
+            width: 40, height: 40,
             alignItems: "center", justifyContent: "center",
-            marginLeft: 8,
+            marginLeft: 6,
+            flexShrink: 0,
           }}>
           <MenuIcon size={21} strokeWidth={1.9} />
         </button>
@@ -5585,1090 +6039,201 @@ const EXISTING_PROPS = [
   },
 ];
 
-const ALL_PROPS = [...SEED_PROPS, ...MORE_PROPS, ...EXISTING_PROPS];
-
-// ─── BUDGET SCREEN — the big hook ─────────────────────────────────────────────
-// ════════════════════════════════════════════════════════════════════════════
-// BUDGET SCREEN — scrollytelling story page. Replaces the old timeline budget tab.
-// Eight full-viewport scenes that walk a visitor from "I didn't know this
-// affected me" to "I can't buy without this." Two investors, same money, same
-// week — one buys on the old numbers, one runs Bricks. We follow them to 2057.
-// ════════════════════════════════════════════════════════════════════════════
-
-// ─── Scene shell — every section is 100vh, centered, with scroll-reveal ──────
-function Scene({ children, style, id }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, amount: 0.4 });
-  return (
-    <section ref={ref} id={id} className="bgt-scene" style={{
-      minHeight: "100svh",
-      display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "center",
-      position: "relative",
-      padding: "80px 32px",
-      ...style,
-    }}>
-      <motion.div
-        initial={{ opacity: 0, y: 28 }}
-        animate={inView ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-        style={{ width: "100%", maxWidth: 980, display: "flex", flexDirection: "column", alignItems: "center" }}>
-        {children}
-      </motion.div>
-    </section>
-  );
-}
-
-// ─── A number that counts up when it scrolls into view ──────────────────────
-function CountUp({ to, prefix = "", suffix = "", duration = 1.6, decimals = 0, className, style }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, amount: 0.6 });
-  const [val, setVal] = useState(0);
-  useEffect(() => {
-    if (!inView) return;
-    let raf, start;
-    const tick = (t) => {
-      if (!start) start = t;
-      const p = Math.min(1, (t - start) / (duration * 1000));
-      const eased = 1 - Math.pow(1 - p, 3);
-      setVal(to * eased);
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [inView, to, duration]);
-  const display = decimals > 0
-    ? val.toFixed(decimals)
-    : Math.round(val).toLocaleString();
-  return <span ref={ref} className={className} style={style}>{prefix}{display}{suffix}</span>;
-}
-
-// ─── Eyebrow used inside scenes ──────────────────────────────────────────────
-function SceneEyebrow({ children, tone = "muted" }) {
-  const color = tone === "rose" ? "#FB7185" : "rgba(245,247,250,0.42)";
-  return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 14,
-      marginBottom: 26,
-    }}>
-      <span style={{ width: 28, height: 1, background: `linear-gradient(to right, transparent, ${tone === "rose" ? "rgba(251,113,133,0.5)" : "rgba(245,247,250,0.22)"})` }} />
-      <span style={{
-        fontSize: 12, fontWeight: 600, letterSpacing: "0.2em", textTransform: "uppercase",
-        color,
-      }}>{children}</span>
-      <span style={{ width: 28, height: 1, background: `linear-gradient(to left, transparent, ${tone === "rose" ? "rgba(251,113,133,0.5)" : "rgba(245,247,250,0.22)"})` }} />
-    </div>
-  );
-}
-
-// ─── Serif scene headline ────────────────────────────────────────────────────
-function SceneH({ children, size = 52, style }) {
-  return (
-    <h2 className="bgt-h" style={{
-      margin: 0,
-      fontFamily: 'ui-serif, Georgia, "Times New Roman", serif',
-      fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.1,
-      color: "#F5F7FA",
-      fontSize: size,
-      textAlign: "center",
-      ...style,
-    }}>{children}</h2>
-  );
-}
-
-const ROSE_GRAD = "linear-gradient(115deg, #FDE2E8 0%, #FB7185 50%, #FB923C 100%)";
-function GradText({ children }) {
-  return <span style={{
-    fontStyle: "italic", fontWeight: 500,
-    background: ROSE_GRAD,
-    WebkitBackgroundClip: "text", backgroundClip: "text",
-    WebkitTextFillColor: "transparent", color: "transparent",
-    // inline-block makes the gradient paint ONCE across the whole block,
-    // so it blends evenly across multiple lines instead of restarting per line
-    display: "inline-block",
-    textAlign: "center",
-    // descenders on italic g/y extend below the line box; without room here
-    // background-clip:text shears them off. Pad + loosen line-height to fit.
-    lineHeight: 1.18,
-    paddingBottom: "0.14em",
-  }}>{children}</span>;
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// THE TWO-INVESTOR MODEL — one set of numbers, used across scenes 5 & 6.
-// Dave buys an established house; Mara buys a new build. Same $850k, same week.
-// All figures are illustrative but built on the post-budget rules:
-//  - established bought after 12 May 2026 → negative gearing quarantined
-//  - new build → negative gearing retained, deductible against income
-// ════════════════════════════════════════════════════════════════════════════
-const STORY = {
-  budget: 850_000,
-  // Dave — established. Loss can't offset salary; he funds the full shortfall.
-  dave: {
-    name: "Dave",
-    kind: "Established house",
-    annualBleedY1: 19_400,         // out of pocket, year 1
-    totalOutOfPocket: 214_000,     // 30-yr cumulative cash he tips in
-    breakEven: null,               // never comfortably positive on the old plan
-    netAt2057: 268_000,
+// ─── Eastern Sydney public listings — populates the map for the demo pitch ───
+// These show on Research + Map (Belle Property / Ray White heartland).
+const EASTERN_PROPS = [
+  {
+    id: 31, name: "Bondi Beach Penthouse", suburb: "Bondi Beach, NSW", state: "NSW",
+    price: 2450000, yieldPct: 3.6, growthPct: 6.4, color: 5, icon: "wave",
+    type: "Apartment", build: "new", status: "considering",
+    agent: DEMO_AGENT, agentLive: true,
+    confidence: {
+      growth: { score: 84, reasons: ["Eastern Sydney median +7.8% YoY", "Beachfront premium widening", "Limited new supply"] },
+      risk:   { score: 30, reasons: ["High-tier price exposure", "Salt-air maintenance", "Strata 12 units"] },
+      liquid: { score: 82, reasons: ["14-day median DOM", "Sydney clearance 73%", "Lifestyle buyer demand"] },
+    },
+    comps: [{ addr: "Penthouse/1 Notts Ave", price: 2420000, dom: 16, days: 11 }],
   },
-  // Mara — new build. Negative gearing retained + depreciation; breaks even fast.
-  mara: {
-    name: "Mara",
-    kind: "New build",
-    annualBleedY1: 6_200,
-    totalOutOfPocket: 41_000,
-    breakEven: 9,                  // cashflow-positive year 9
-    netAt2057: 612_000,
+  {
+    id: 32, name: "Bronte Garden Apartment", suburb: "Bronte, NSW", state: "NSW",
+    price: 1680000, yieldPct: 3.4, growthPct: 5.8, color: 7, icon: "wave",
+    type: "Apartment", build: "existing", status: "considering",
+    agent: DEMO_AGENT, agentLive: true,
+    confidence: {
+      growth: { score: 76, reasons: ["Beachside owner-occupier suburb", "Median +6.4% YoY", "Coogee–Bronte coastal walk premium"] },
+      risk:   { score: 42, reasons: ["1980s build · limited Div 40", "No NG post-2027", "Established stock"] },
+      liquid: { score: 78, reasons: ["19-day median DOM", "Strong owner-occupier demand", "Compact strata"] },
+    },
+    comps: [{ addr: "5/118 Bronte Rd", price: 1640000, dom: 17, days: 33 }],
   },
-};
+  {
+    id: 33, name: "Coogee Sea Terrace", suburb: "Coogee, NSW", state: "NSW",
+    price: 1920000, yieldPct: 3.9, growthPct: 6.0, color: 4, icon: "wave",
+    type: "Townhouse", build: "new", status: "considering",
+    agent: DEMO_AGENT, agentLive: true,
+    confidence: {
+      growth: { score: 80, reasons: ["Coogee median +7.1% YoY", "Beachside lifestyle premium", "UNSW rental floor"] },
+      risk:   { score: 31, reasons: ["Strata 4 units", "Coastal exposure", "Builder iCIRT 4-star"] },
+      liquid: { score: 76, reasons: ["18-day median DOM", "Sydney clearance 73%", "Wide buyer pool"] },
+    },
+    comps: [{ addr: "2/14 Beach St", price: 1880000, dom: 19, days: 22 }],
+  },
+  {
+    id: 34, name: "Paddington Terrace", suburb: "Paddington, NSW", state: "NSW",
+    price: 2150000, yieldPct: 3.0, growthPct: 5.4, color: 9, icon: "home",
+    type: "Victorian terrace", build: "existing", status: "considering",
+    agent: DEMO_AGENT, agentLive: true,
+    confidence: {
+      growth: { score: 75, reasons: ["Heritage protected supply", "Median +5.8% YoY", "Walking-distance to CBD"] },
+      risk:   { score: 48, reasons: ["Pre-1900 build · no depreciation", "Yield very tight", "No NG post-2027"] },
+      liquid: { score: 80, reasons: ["16-day median DOM", "Owner-occupier dominant", "Premium heritage stock"] },
+    },
+    comps: [{ addr: "212 Oxford St", price: 2080000, dom: 21, days: 41 }],
+  },
+  {
+    id: 35, name: "Maroubra Family New Build", suburb: "Maroubra, NSW", state: "NSW",
+    price: 1490000, yieldPct: 4.2, growthPct: 6.2, color: 4, icon: "wave",
+    type: "Townhouse", build: "new", status: "considering",
+    confidence: {
+      growth: { score: 78, reasons: ["Maroubra median +6.7% YoY", "Beachside lifestyle premium", "Light Rail extension corridor"] },
+      risk:   { score: 30, reasons: ["Strata 6 units", "Builder iCIRT 4-star", "Coastal exposure"] },
+      liquid: { score: 79, reasons: ["20-day median DOM", "Family + investor overlap", "Scarce new builds"] },
+    },
+    comps: [{ addr: "3/12 Marine Pde", price: 1465000, dom: 18, days: 24 }],
+  },
+  {
+    id: 36, name: "Randwick Investor Apartment", suburb: "Randwick, NSW", state: "NSW",
+    price: 1080000, yieldPct: 4.6, growthPct: 5.7, color: 7, icon: "bldg",
+    type: "Apartment", build: "new", status: "considering",
+    confidence: {
+      growth: { score: 80, reasons: ["UNSW + hospital tenant pool", "Light rail terminus", "Strong rental yields"] },
+      risk:   { score: 32, reasons: ["Strata 28 units", "Student rental cycles", "Builder iCIRT 4-star"] },
+      liquid: { score: 82, reasons: ["15-day median DOM", "Yield buyer demand", "Sub-$1.1M entry"] },
+    },
+    comps: [{ addr: "12/45 Belmore Rd", price: 1055000, dom: 13, days: 18 }],
+  },
+  {
+    id: 37, name: "Clovelly Beach Cottage", suburb: "Clovelly, NSW", state: "NSW",
+    price: 2680000, yieldPct: 2.8, growthPct: 5.6, color: 5, icon: "wave",
+    type: "Federation cottage", build: "existing", status: "considering",
+    confidence: {
+      growth: { score: 76, reasons: ["Coastal walk premium", "Median +6.0% YoY", "Tightly held suburb"] },
+      risk:   { score: 49, reasons: ["1920s build · limited Div 40", "Yield very tight", "No NG post-2027"] },
+      liquid: { score: 75, reasons: ["18-day median DOM", "Owner-occupier dominant", "Premium beachside"] },
+    },
+    comps: [{ addr: "8 Eastbourne Ave", price: 2620000, dom: 22, days: 38 }],
+  },
+  {
+    id: 38, name: "Woollahra Garden Terrace", suburb: "Woollahra, NSW", state: "NSW",
+    price: 3100000, yieldPct: 2.6, growthPct: 5.2, color: 9, icon: "home",
+    type: "Victorian terrace", build: "existing", status: "considering",
+    confidence: {
+      growth: { score: 77, reasons: ["Boutique village strip", "Heritage protected supply", "Owner-occupier dominant"] },
+      risk:   { score: 50, reasons: ["Pre-1900 build · no depreciation", "Top tier price band", "No NG post-2027"] },
+      liquid: { score: 73, reasons: ["24-day median DOM", "Trophy heritage stock", "Wide price range comps"] },
+    },
+    comps: [{ addr: "62 Queen St", price: 2980000, dom: 26, days: 45 }],
+  },
+  {
+    id: 39, name: "Bellevue Hill Harbour View", suburb: "Bellevue Hill, NSW", state: "NSW",
+    price: 4100000, yieldPct: 2.4, growthPct: 5.4, color: 4, icon: "wave",
+    type: "Apartment", build: "existing", status: "considering",
+    confidence: {
+      growth: { score: 74, reasons: ["Trophy harbourside corridor", "Median +5.4% YoY", "Owner-occupier dominant"] },
+      risk:   { score: 52, reasons: ["1990s strata · limited Div 40", "Top tier price band", "No NG post-2027"] },
+      liquid: { score: 70, reasons: ["28-day median DOM", "International buyer interest", "Niche price band"] },
+    },
+    comps: [{ addr: "5/22 Victoria Rd", price: 3960000, dom: 31, days: 52 }],
+  },
+  {
+    id: 40, name: "Tamarama Glass House", suburb: "Tamarama, NSW", state: "NSW",
+    price: 3450000, yieldPct: 3.2, growthPct: 6.8, color: 7, icon: "wave",
+    type: "House", build: "new", status: "considering",
+    confidence: {
+      growth: { score: 86, reasons: ["Tightly held coastal pocket", "Median +8.2% YoY", "Near-zero new supply"] },
+      risk:   { score: 34, reasons: ["Coastal exposure", "Builder iCIRT 5-star", "Architectural single dwelling"] },
+      liquid: { score: 72, reasons: ["27-day median DOM", "Trophy buyer pool", "Limited comp set"] },
+    },
+    comps: [{ addr: "14 Kenneth St", price: 3300000, dom: 28, days: 14 }],
+  },
+  {
+    id: 41, name: "Bondi Junction Tower", suburb: "Bondi Junction, NSW", state: "NSW",
+    price: 1240000, yieldPct: 4.4, growthPct: 5.8, color: 5, icon: "bldg",
+    type: "Apartment", build: "new", status: "considering",
+    confidence: {
+      growth: { score: 78, reasons: ["Westfield retail corridor", "Median +6.4% YoY", "Train + bus interchange"] },
+      risk:   { score: 33, reasons: ["Strata 96 units", "CBD-style oversupply caps", "Builder iCIRT 4-star"] },
+      liquid: { score: 80, reasons: ["17-day median DOM", "Yield + lifestyle overlap", "Investor + downsizer pool"] },
+    },
+    comps: [{ addr: "1408/2 Spring St", price: 1210000, dom: 16, days: 21 }],
+  },
+  {
+    id: 42, name: "Kingsford Walk-up", suburb: "Kingsford, NSW", state: "NSW",
+    price: 815000, yieldPct: 5.1, growthPct: 5.4, color: 8, icon: "bldg",
+    type: "1980s walk-up", build: "existing", status: "considering",
+    confidence: {
+      growth: { score: 70, reasons: ["UNSW corridor demand", "Light rail terminus", "Median +5.0% YoY"] },
+      risk:   { score: 47, reasons: ["1980s build · minimal Div 43", "Strata 32 units", "No NG post-2027"] },
+      liquid: { score: 76, reasons: ["19-day median DOM", "Sub-$900k investor band", "Strong yield"] },
+    },
+    comps: [{ addr: "4/22 Strachan St", price: 798000, dom: 17, days: 31 }],
+  },
+  {
+    id: 43, name: "Queens Park Family Home", suburb: "Queens Park, NSW", state: "NSW",
+    price: 2890000, yieldPct: 2.9, growthPct: 6.0, color: 4, icon: "home",
+    type: "Family house", build: "existing", status: "considering",
+    confidence: {
+      growth: { score: 80, reasons: ["Park-fronting blue-chip pocket", "Tightly held school catchment", "Median +6.4% YoY"] },
+      risk:   { score: 46, reasons: ["1900s build · limited Div 40", "Yield very tight", "No NG post-2027"] },
+      liquid: { score: 74, reasons: ["22-day median DOM", "Owner-occupier dominant", "Family buyer pool"] },
+    },
+    comps: [{ addr: "18 York Rd", price: 2780000, dom: 25, days: 27 }],
+  },
+];
 
-// ─── Mini 30-year cashflow chart that draws itself on scroll ─────────────────
-function CashflowChart({ variant }) {
-  // variant: "bleed" (Dave) or "build" (Mara)
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, amount: 0.5 });
+// ─── Aisha's private preview — agent-fed stock, not on public Research ────────
+// Only shown on the AgentPreviewScreen. Detail page picks up agentPreview === true
+// to swap the listing agent block, modeled banner, and bottom CTA.
+const AGENT_PREVIEW_PROPS = [
+  {
+    id: 51, name: "Vaucluse Family Home", suburb: "Vaucluse, NSW", state: "NSW",
+    price: 6450000, yieldPct: 2.6, growthPct: 5.6, color: 4, icon: "home",
+    type: "Family house", build: "existing", status: "considering",
+    source: "agent-preview", agentPreview: true, agent: DEMO_AGENT,
+    confidence: {
+      growth: { score: 82, reasons: ["Trophy harbourside corridor", "Median +6.4% YoY", "Owner-occupier dominant"] },
+      risk:   { score: 46, reasons: ["Top tier price band", "Established stock · no NG post-2027", "Long DOM at this price"] },
+      liquid: { score: 64, reasons: ["38-day median DOM at $6M+", "Niche buyer pool", "International buyer interest"] },
+    },
+    comps: [{ addr: "21 Wentworth Rd", price: 6280000, dom: 41, days: 18 }],
+  },
+  {
+    id: 52, name: "Double Bay Garden Apartment", suburb: "Double Bay, NSW", state: "NSW",
+    price: 2280000, yieldPct: 3.1, growthPct: 5.4, color: 5, icon: "bldg",
+    type: "Apartment", build: "existing", status: "considering",
+    source: "agent-preview", agentPreview: true, agent: DEMO_AGENT,
+    confidence: {
+      growth: { score: 76, reasons: ["Boutique village strip", "Owner-occupier turnover low", "Median +5.6% YoY"] },
+      risk:   { score: 44, reasons: ["1990s strata 18 units", "No NG post-2027", "Limited Div 40"] },
+      liquid: { score: 74, reasons: ["22-day median DOM", "Strong downsizer demand", "Premium parking included"] },
+    },
+    comps: [{ addr: "5/24 William St", price: 2210000, dom: 24, days: 29 }],
+  },
+  {
+    id: 53, name: "Rose Bay New Build", suburb: "Rose Bay, NSW", state: "NSW",
+    price: 3120000, yieldPct: 3.2, growthPct: 5.9, color: 7, icon: "wave",
+    type: "Apartment", build: "new", status: "considering",
+    source: "agent-preview", agentPreview: true, agent: DEMO_AGENT,
+    confidence: {
+      growth: { score: 81, reasons: ["Harbour outlook premium", "Eastern Suburbs median +7.0% YoY", "Limited new supply"] },
+      risk:   { score: 33, reasons: ["Top-tier price band", "Builder iCIRT 4-star", "Strata 14 units"] },
+      liquid: { score: 73, reasons: ["26-day median DOM", "Downsizer + investor overlap", "Lift + parking"] },
+    },
+    comps: [{ addr: "3/61 New South Head Rd", price: 3080000, dom: 28, days: 14 }],
+  },
+];
 
-  // 30 yearly cashflow points — modelled shape, not random
-  const years = 30;
-  const data = useMemo(() => {
-    const pts = [];
-    for (let i = 0; i < years; i++) {
-      if (variant === "bleed") {
-        // starts deep negative, claws toward zero but stays under water long
-        const v = -19400 + (i * 540) + Math.sin(i / 3) * 400;
-        pts.push(v);
-      } else {
-        // starts mildly negative, crosses zero ~year 9, climbs
-        const v = -6200 + (i * 1450) + Math.sin(i / 4) * 300;
-        pts.push(v);
-      }
-    }
-    return pts;
-  }, [variant]);
-
-  const W = 520, H = 200, pad = 8;
-  const max = Math.max(...data.map(Math.abs), 1);
-  const zeroY = H / 2;
-  const xFor = (i) => pad + (i / (years - 1)) * (W - pad * 2);
-  const yFor = (v) => zeroY - (v / max) * (H / 2 - pad);
-
-  const linePath = data.map((v, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(v).toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L ${xFor(years - 1).toFixed(1)} ${zeroY} L ${xFor(0).toFixed(1)} ${zeroY} Z`;
-
-  const stroke = variant === "bleed" ? "#F43F5E" : "#22C55E";
-  const fill = variant === "bleed" ? "rgba(244,63,94,0.16)" : "rgba(34,197,94,0.15)";
-
-  return (
-    <svg ref={ref} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: 520, display: "block" }}>
-      {/* zero line */}
-      <line x1={pad} y1={zeroY} x2={W - pad} y2={zeroY}
-        stroke="rgba(245,247,250,0.16)" strokeWidth="1" strokeDasharray="3 4" />
-      {/* filled area */}
-      <motion.path d={areaPath} fill={fill}
-        initial={{ opacity: 0 }}
-        animate={inView ? { opacity: 1 } : {}}
-        transition={{ duration: 0.8, delay: 0.6 }} />
-      {/* the line draws itself */}
-      <motion.path d={linePath} fill="none" stroke={stroke} strokeWidth="2.5"
-        strokeLinecap="round" strokeLinejoin="round"
-        initial={{ pathLength: 0 }}
-        animate={inView ? { pathLength: 1 } : {}}
-        transition={{ duration: 1.8, ease: "easeInOut" }} />
-      {/* break-even marker for the build variant */}
-      {variant === "build" && (
-        <motion.circle cx={xFor(STORY.mara.breakEven)} cy={yFor(0)} r="5"
-          fill="#22C55E" stroke="#05070A" strokeWidth="2"
-          initial={{ scale: 0 }}
-          animate={inView ? { scale: 1 } : {}}
-          transition={{ duration: 0.4, delay: 1.6, type: "spring" }} />
-      )}
-    </svg>
-  );
-}
-
-// ─── Budget story countdown clock — the deadline made visceral ──────────────
-function BudgetCountdownClock() {
-  const { days, hours, mins, secs } = useCountdown();
-  const units = [
-    { v: days, label: "days" },
-    { v: hours, label: "hours" },
-    { v: mins, label: "minutes" },
-    { v: secs, label: "seconds" },
-  ];
-  return (
-    <div style={{
-      display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center",
-    }}>
-      {units.map((u, i) => (
-        <div key={u.label} style={{
-          minWidth: 92, padding: "18px 14px", borderRadius: 16,
-          background: "rgba(244,63,94,0.06)",
-          border: "1px solid rgba(244,63,94,0.18)",
-          textAlign: "center",
-        }}>
-          <motion.div
-            key={u.label === "seconds" ? u.v : undefined}
-            initial={u.label === "seconds" ? { opacity: 0.4, y: -3 } : false}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-            style={{
-              fontFamily: 'ui-serif, Georgia, serif', fontSize: 38, fontWeight: 600,
-              color: "#FB7185", lineHeight: 1, fontVariantNumeric: "tabular-nums",
-            }}>
-            {String(u.v).padStart(2, "0")}
-          </motion.div>
-          <div style={{
-            fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: "rgba(245,247,250,0.45)", fontWeight: 600, marginTop: 8,
-          }}>{u.label}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MAIN
-// ════════════════════════════════════════════════════════════════════════════
-function BudgetScreen({ onBrowse }) {
-  const { days: daysUntilCliff } = useCountdown();
-
-  // Scene 4 interactive — which property type is selected
-  const [propType, setPropType] = useState("established");
-
-  // 360-square proof scene — established (bleeds) vs new build (turns positive).
-  // Same price/yield/growth; the only difference is the post-budget tax treatment
-  // the model applies to each build type — so the contrast is the budget itself.
-  const [proofType, setProofType] = useState("established");
-  const proofCashflow = useMemo(() => generateCashflow({
-    price: 850000, yieldPct: 3.6, growthPct: 5,
-    rate: MODEL_DEFAULTS.rate, deposit: MODEL_DEFAULTS.deposit,
-    marginalRate: 0.39, state: "NSW", loanType: MODEL_DEFAULTS.loanType,
-    build: proofType === "newbuild" ? "new" : "existing",
-    type: "House",
-  }), [proofType]);
-  const proofMilestones = useMemo(() => calcDollarMilestones(proofCashflow), [proofCashflow]);
-  const proofBreakEven = useMemo(() => yearTurnsPositive(proofCashflow), [proofCashflow]);
-  const proofBleed = useMemo(
-    () => proofCashflow.reduce((s, x) => s + (x < 0 ? -x : 0), 0),
-    [proofCashflow]
-  );
-
-  return (
-    <motion.div key="budget"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      transition={{ duration: 0.3 }}
-      className="bgt-root"
-      style={{
-        position: "relative", background: "#05070A",
-        width: "100%",
-        overflowX: "hidden",
-        // cancel only the app wrapper's vertical padding so scenes are flush
-        marginTop: -56,
-        marginBottom: -32,
-        borderRadius: 0,
-      }}>
-      {/* Scroll-scrubbed Sydney video — frame 1 at top of page, last frame at bottom.
-          Stays fixed full-viewport behind the scenes; readability scrim is built in. */}
-      <VideoBackdrop />
-
-      {/* nav sits over the hero — give the first scene clearance */}
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE 1 — HERO (the moment + the change, fused)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-hero" style={{ minHeight: "100svh" }}>
-        {/* atmospheric bg */}
-        <div style={{
-          position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
-        }}>
-          <div style={{
-            position: "absolute", top: "-20%", left: "50%", transform: "translateX(-50%)",
-            width: 900, height: 700,
-            background: "radial-gradient(ellipse at center, rgba(244,63,94,0.10), transparent 65%)",
-          }} />
-          <div style={{
-            position: "absolute", inset: 0,
-            background: "linear-gradient(to bottom, transparent 60%, #05070A)",
-          }} />
-        </div>
-
-        {/* the timestamp is the eyebrow — the moment everything changed */}
-        <div style={{
-          fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-          fontSize: 12.5, letterSpacing: "0.22em", color: "#FB7185", fontWeight: 600,
-          marginBottom: 28,
-        }}>
-          7:30 PM · 12 MAY 2026 · THE BUDGET
-        </div>
-        <SceneH size={60} style={{ maxWidth: 940 }}>
-          Negative gearing just died<br/>
-          for established homes.<br/>
-          <GradText>The house you were about to buy<br/>
-          could now cost six figures more<br/>
-          than the identical one next door.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "30px 0 0", maxWidth: 650,
-          fontSize: 19, lineHeight: 1.5, color: "rgba(245,247,250,0.72)",
-          textAlign: "center",
-        }}>
-          Same street. Same price tag. Bought one day apart — and the
-          tax office now treats them as two completely different
-          investments, for the next 30 years. Here's how to tell which
-          side of the line yours is on.
-        </p>
-        <div style={{
-          marginTop: 44, display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-        }}>
-          <span style={{
-            fontSize: 12, letterSpacing: "0.16em", textTransform: "uppercase",
-            color: "rgba(245,247,250,0.4)", fontWeight: 600,
-          }}>What changed, and what to do</span>
-          <motion.div
-            animate={{ y: [0, 7, 0] }}
-            transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}>
-            <ChevronRight size={18} color="rgba(245,247,250,0.4)" style={{ transform: "rotate(90deg)" }} />
-          </motion.div>
-        </div>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE 3 — THE TWO INVESTORS
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-two">
-        <SceneEyebrow>Same money. Same week.</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 760, marginBottom: 14 }}>
-          Two investors. <GradText>$850,000 each.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 48px", maxWidth: 560,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.6)", textAlign: "center",
-        }}>
-          They buy in the same suburb, the same month. One does what
-          investors have always done. The other runs the numbers first.
-        </p>
-
-        <div className="bgt-two-grid" style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, width: "100%",
-        }}>
-          {[STORY.dave, STORY.mara].map((p, i) => (
-            <div key={p.name} style={{
-              background: "rgba(255,255,255,0.025)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 18, padding: "28px 26px",
-              textAlign: "center",
-            }}>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
-                color: "rgba(245,247,250,0.4)", fontWeight: 600, marginBottom: 14,
-              }}>{i === 0 ? "The usual way" : "The Bricks way"}</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 30, fontWeight: 500,
-                color: "#F5F7FA", marginBottom: 6,
-              }}>{p.name}</div>
-              <div style={{ fontSize: 15, color: "rgba(245,247,250,0.55)" }}>
-                Buys a {p.kind.toLowerCase()}
-              </div>
-            </div>
-          ))}
-        </div>
-        <p style={{
-          margin: "32px 0 0", fontSize: 15, color: "rgba(245,247,250,0.45)", textAlign: "center",
-        }}>
-          Same budget. Same street. Keep scrolling — watch the gap open.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE 4 — THE OLD MAP IS WRONG (interactive)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-dual" style={{ background: "#070A0F" }}>
-        <SceneEyebrow tone="rose">The dual system</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 820, marginBottom: 16 }}>
-          One street apart.<br/>
-          <GradText>Two completely different rules.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 36px", maxWidth: 580,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.6)", textAlign: "center",
-        }}>
-          After 1 July 2027, the tax office treats a new build and an
-          established home as different species. Tap each one.
-        </p>
-
-        {/* toggle */}
-        <div style={{
-          display: "inline-flex", gap: 6, padding: 6,
-          background: "rgba(255,255,255,0.04)", borderRadius: 14,
-          border: "1px solid rgba(255,255,255,0.08)", marginBottom: 28,
-        }}>
-          {[
-            { id: "established", label: "Established home" },
-            { id: "newbuild", label: "New build" },
-          ].map(opt => {
-            const active = propType === opt.id;
-            return (
-              <button key={opt.id} onClick={() => setPropType(opt.id)}
-                style={{
-                  cursor: "pointer", border: "none",
-                  padding: "11px 22px", borderRadius: 10,
-                  fontSize: 14, fontWeight: 600, letterSpacing: -0.03,
-                  background: active
-                    ? "linear-gradient(135deg, rgba(244,63,94,0.22), rgba(244,63,94,0.08))"
-                    : "transparent",
-                  color: active ? "#FECDD3" : "rgba(245,247,250,0.55)",
-                  boxShadow: active ? "0 0 0 1px rgba(244,63,94,0.3) inset" : "none",
-                  transition: "all 0.2s",
-                }}>{opt.label}</button>
-            );
-          })}
-        </div>
-
-        {/* the rewriting panel */}
-        <div style={{
-          width: "100%", maxWidth: 620,
-          background: "rgba(255,255,255,0.025)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 18, padding: "8px 0", overflow: "hidden",
-        }}>
-          <AnimatePresence mode="wait">
-            <motion.div key={propType}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.28 }}>
-              {[
-                {
-                  label: "Negative gearing",
-                  est: "Quarantined — can't offset your salary",
-                  nb: "Retained — offsets your salary in full",
-                },
-                {
-                  label: "Your annual loss",
-                  est: "Funded entirely out of your own pocket",
-                  nb: "Softened by a tax refund each year",
-                },
-                {
-                  label: "Capital gains tax",
-                  est: "Indexation + 30% minimum on the real gain",
-                  nb: "Choose the old 50% discount, or indexation",
-                },
-              ].map((row, idx) => {
-                const good = propType === "newbuild";
-                const val = good ? row.nb : row.est;
-                return (
-                  <div key={row.label} style={{
-                    display: "flex", alignItems: "flex-start", gap: 16,
-                    padding: "18px 26px",
-                    borderTop: idx === 0 ? "none" : "1px solid rgba(255,255,255,0.05)",
-                  }}>
-                    <div style={{
-                      flexShrink: 0, width: 22, height: 22, borderRadius: 999,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      marginTop: 1,
-                      background: good ? "rgba(34,197,94,0.16)" : "rgba(244,63,94,0.16)",
-                    }}>
-                      {good
-                        ? <Check size={13} color="#22C55E" strokeWidth={3} />
-                        : <X size={13} color="#F43F5E" strokeWidth={3} />}
-                    </div>
-                    <div style={{ textAlign: "left" }}>
-                      <div style={{
-                        fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase",
-                        color: "rgba(245,247,250,0.4)", fontWeight: 600, marginBottom: 4,
-                      }}>{row.label}</div>
-                      <div style={{
-                        fontSize: 16, color: good ? "#D6F5E3" : "#FBD5DC", fontWeight: 500,
-                      }}>{val}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-        <p style={{
-          margin: "26px 0 0", fontSize: 15, color: "rgba(245,247,250,0.45)",
-          maxWidth: 540, textAlign: "center", lineHeight: 1.5,
-        }}>
-          Same suburb. Same price. The only difference is which side of
-          the line the property sits on — and almost no listing tells you.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE — TWO LEVERS (negative gearing + CGT, named as forces)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-levers">
-        <SceneEyebrow>Not one change. Two.</SceneEyebrow>
-        <SceneH size={44} style={{ maxWidth: 800, marginBottom: 16 }}>
-          The budget pulled <GradText>two levers at once</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 40px", maxWidth: 600,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          Most countries change one property tax rule at a time. Australia
-          moved two together — and they interact. That's what makes the
-          new maths impossible to do in your head.
-        </p>
-
-        <div style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20,
-          width: "100%", maxWidth: 720,
-        }} className="bgt-two-grid">
-          {[
-            {
-              tag: "Lever one",
-              title: "Negative gearing",
-              body: "On an established home, your yearly loss can no longer come off your salary. It's quarantined — locked away to use only against future property income.",
-              foot: "Hits you every year you hold.",
-            },
-            {
-              tag: "Lever two",
-              title: "Capital gains tax",
-              body: "The flat 50% discount is gone. In its place: an inflation-indexed system with a 30% minimum. Whether that helps or hurts depends on inflation, your rate, and how long you hold.",
-              foot: "Hits you the day you sell.",
-            },
-          ].map(card => (
-            <div key={card.title} style={{
-              background: "rgba(255,255,255,0.025)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 18, padding: "26px 24px",
-              textAlign: "left",
-            }}>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
-                color: "#FB7185", fontWeight: 700, marginBottom: 12,
-              }}>{card.tag}</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 24, fontWeight: 500,
-                color: "#F5F7FA", marginBottom: 12,
-              }}>{card.title}</div>
-              <div style={{ fontSize: 15.5, lineHeight: 1.5, color: "rgba(245,247,250,0.62)", marginBottom: 14 }}>
-                {card.body}
-              </div>
-              <div style={{
-                fontSize: 13, fontWeight: 600, color: "rgba(245,247,250,0.4)",
-                paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)",
-              }}>{card.foot}</div>
-            </div>
-          ))}
-        </div>
-        <p style={{
-          margin: "30px 0 0", fontSize: 16, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.7)", maxWidth: 560, textAlign: "center",
-        }}>
-          One lever you'd notice. Two that interact — across 30 years,
-          through inflation you can't predict — is not something anyone
-          eyeballs from a listing.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE — THE BLEED (Dave)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-bleed">
-        <SceneEyebrow>Dave · the usual way</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 760, marginBottom: 14 }}>
-          Dave bought established.<br/>
-          <GradText>This is the next 30 years.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 36px", maxWidth: 560,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.6)", textAlign: "center",
-        }}>
-          His property loses money every year. It always did — but the
-          tax refund used to cover the shortfall. Now that refund is
-          quarantined. The cheque doesn't come.
-        </p>
-
-        <div style={{
-          width: "100%", maxWidth: 560,
-          background: "rgba(244,63,94,0.04)",
-          border: "1px solid rgba(244,63,94,0.14)",
-          borderRadius: 20, padding: "32px 28px",
-        }}>
-          <CashflowChart variant="bleed" />
-          <div style={{
-            display: "flex", justifyContent: "space-between", marginTop: 24,
-            paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.06)",
-          }}>
-            <div style={{ textAlign: "left" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Out of pocket, 30 years</div>
-              <CountUp to={STORY.dave.totalOutOfPocket} prefix="–$"
-                style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 34, fontWeight: 500, color: "#F87171" }} />
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Year it pays you back</div>
-              <div style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 34, fontWeight: 500, color: "#F87171" }}>Never</div>
-            </div>
-          </div>
-        </div>
-        <p style={{
-          margin: "26px 0 0", fontSize: 15, color: "rgba(245,247,250,0.45)",
-          maxWidth: 520, textAlign: "center", lineHeight: 1.5,
-        }}>
-          Dave didn't buy a bad property. He bought a normal one — on
-          numbers that no longer exist.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE 6 — THE SAME MONEY, DONE RIGHT (Mara)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-build" style={{ background: "#070A0F" }}>
-        <SceneEyebrow tone="rose">Mara · the Bricks way</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 760, marginBottom: 14 }}>
-          Same $850,000.<br/>
-          <GradText>A completely different 30 years.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 36px", maxWidth: 560,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.6)", textAlign: "center",
-        }}>
-          Mara ran the post-budget numbers before she signed. She bought
-          a property that still gears, still claims depreciation — and
-          turns cashflow-positive in year nine.
-        </p>
-
-        <div style={{
-          width: "100%", maxWidth: 560,
-          background: "rgba(34,197,94,0.04)",
-          border: "1px solid rgba(34,197,94,0.16)",
-          borderRadius: 20, padding: "32px 28px",
-        }}>
-          <CashflowChart variant="build" />
-          <div style={{
-            display: "flex", justifyContent: "space-between", marginTop: 24,
-            paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.06)",
-          }}>
-            <div style={{ textAlign: "left" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Out of pocket, 30 years</div>
-              <CountUp to={STORY.mara.totalOutOfPocket} prefix="–$"
-                style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 34, fontWeight: 500, color: "#4ADE80" }} />
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Year it pays you back</div>
-              <div style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 34, fontWeight: 500, color: "#4ADE80" }}>Year {STORY.mara.breakEven}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* the gap */}
-        <div style={{
-          marginTop: 32, padding: "26px 32px",
-          background: "linear-gradient(135deg, rgba(244,63,94,0.08), rgba(251,146,60,0.06))",
-          border: "1px solid rgba(251,113,133,0.2)",
-          borderRadius: 18, textAlign: "center", maxWidth: 560, width: "100%",
-        }}>
-          <div style={{
-            fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase",
-            color: "rgba(245,247,250,0.5)", fontWeight: 600, marginBottom: 10,
-          }}>The gap between Dave and Mara by 2057</div>
-          <CountUp to={STORY.mara.netAt2057 - STORY.dave.netAt2057 + STORY.dave.totalOutOfPocket - STORY.mara.totalOutOfPocket} prefix="$"
-            duration={2}
-            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 52, fontWeight: 500 }}
-          />
-          <div style={{ marginTop: 8, fontSize: 15, color: "rgba(245,247,250,0.55)" }}>
-            Same money. Same week. One decision.
-          </div>
-        </div>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE — WHY EVERY CALCULATOR IS WRONG
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-wrong">
-        <SceneEyebrow tone="rose">The problem with most calculators</SceneEyebrow>
-        <SceneH size={44} style={{ maxWidth: 820, marginBottom: 18 }}>
-          The maths just changed.<br/>
-          <GradText>Most calculators haven't caught up.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 36px", maxWidth: 620,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          For an established property bought now, the salary deduction
-          disappears in 2027. A calculator that still counts it is
-          flattering the property by tens of thousands of dollars.
-        </p>
-
-        <div style={{
-          padding: "30px 36px", maxWidth: 540, width: "100%",
-          background: "rgba(255,255,255,0.025)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 18, textAlign: "center",
-        }}>
-          <div style={{ fontSize: 14, color: "rgba(245,247,250,0.55)", marginBottom: 8 }}>
-            Treasury's own worked example puts the cost of getting it wrong at
-          </div>
-          <CountUp to={58851} prefix="$" duration={2}
-            style={{ fontFamily: 'ui-serif, Georgia, serif', fontSize: 50, fontWeight: 500, color: "#FB7185" }} />
-          <div style={{ fontSize: 14, color: "rgba(245,247,250,0.5)", marginTop: 8 }}>
-            in extra tax on a single property sale.
-          </div>
-        </div>
-
-        <p style={{
-          margin: "30px 0 0", maxWidth: 580, fontSize: 17, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.7)", textAlign: "center",
-        }}>
-          Bricks is beautiful — and right. The calculator that's actually
-          been updated, and the only one that shows you 30 years at a glance.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          NEW SCENE — THE LOCK-IN: a two-tier market
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-lockin">
-        <SceneEyebrow tone="rose">The part that stings</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 840, marginBottom: 16 }}>
-          The landlord next door<br/>
-          <GradText>keeps every break you've lost.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 40px", maxWidth: 640,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          Anyone who already owns is grandfathered — they negative-gear
-          forever. Buy the identical house today and you don't.
-          Same street, same bricks, two different tax bills.
-        </p>
-
-        <div className="bgt-two-grid" style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16,
-          maxWidth: 680, width: "100%",
-        }}>
-          {[
-            { tag: "Bought before 12 May 2026", tax: "Full negative gearing", note: "Grandfathered — nothing changes, ever.", tone: "good" },
-            { tag: "Bought today", tax: "Quarantined from 2027", note: "Losses can't touch your salary anymore.", tone: "bad" },
-          ].map(c => (
-            <div key={c.tag} style={{
-              padding: "24px 22px", borderRadius: 16,
-              background: c.tone === "good"
-                ? "rgba(34,197,94,0.07)" : "rgba(244,63,94,0.07)",
-              border: `1px solid ${c.tone === "good" ? "rgba(34,197,94,0.2)" : "rgba(244,63,94,0.2)"}`,
-            }}>
-              <div style={{
-                fontSize: 12, letterSpacing: "0.04em", textTransform: "uppercase",
-                color: "rgba(245,247,250,0.5)", fontWeight: 600, marginBottom: 10,
-              }}>{c.tag}</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
-                color: c.tone === "good" ? "#4ADE80" : "#F87171", marginBottom: 8,
-              }}>{c.tax}</div>
-              <div style={{ fontSize: 13.5, color: "rgba(245,247,250,0.6)", lineHeight: 1.5 }}>
-                {c.note}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <p style={{
-          margin: "32px 0 0", maxWidth: 580, fontSize: 16.5, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.65)", textAlign: "center",
-        }}>
-          It's a two-tier market now. Bricks won't pretend you're on
-          the old side of the line.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          NEW SCENE — THE DOUBLE HIT: gearing on the way in, CGT on the way out
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-doublehit">
-        <SceneEyebrow>It hits twice</SceneEyebrow>
-        <SceneH size={46} style={{ maxWidth: 820, marginBottom: 16 }}>
-          Taxed harder buying in.<br/>
-          <GradText>Taxed harder selling out.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 40px", maxWidth: 620,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          Negative gearing is only half of it. The 50% capital-gains
-          discount is going too — replaced by indexation and a 30%
-          minimum. The budget reaches you at both ends of the hold.
-        </p>
-
-        <div style={{
-          display: "flex", alignItems: "stretch", gap: 14, flexWrap: "wrap",
-          justifyContent: "center", maxWidth: 720, width: "100%",
-        }}>
-          {[
-            { phase: "Going in", title: "Negative gearing", desc: "Rental losses no longer cut your salary tax.", icon: "↓" },
-            { phase: "30 years", title: "The hold", desc: "Where Bricks shows you the real cashflow path.", icon: "—" },
-            { phase: "Coming out", title: "Capital gains", desc: "The 50% discount becomes indexation + a 30% floor.", icon: "↑" },
-          ].map((c, i) => (
-            <div key={c.title} style={{
-              flex: "1 1 200px", padding: "22px 20px", borderRadius: 16,
-              background: i === 1 ? "rgba(251,113,133,0.08)" : "rgba(255,255,255,0.025)",
-              border: `1px solid ${i === 1 ? "rgba(251,113,133,0.22)" : "rgba(255,255,255,0.08)"}`,
-            }}>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase",
-                color: "rgba(245,247,250,0.45)", fontWeight: 600, marginBottom: 9,
-              }}>{c.phase}</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 20, fontWeight: 500,
-                color: "#F5F7FA", marginBottom: 7,
-              }}>{c.title}</div>
-              <div style={{ fontSize: 13, color: "rgba(245,247,250,0.6)", lineHeight: 1.5 }}>
-                {c.desc}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          NEW SCENE — THE INDEXATION CATCH (the under-reported risk)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-indexation" style={{ background: "#070A0F" }}>
-        <SceneEyebrow tone="rose">The part of the CGT change nobody's reading</SceneEyebrow>
-        <SceneH size={44} style={{ maxWidth: 840, marginBottom: 16 }}>
-          Your future tax bill is now pegged to<br/>
-          <GradText>a government inflation number.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 34px", maxWidth: 640,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          The new capital gains system taxes your "real" gain — the sale
-          price minus a cost base lifted by official CPI. The catch: if
-          that index runs lower than the costs you actually live with,
-          the tax office counts inflation as profit. And taxes you on it.
-        </p>
-
-        <div style={{
-          width: "100%", maxWidth: 620,
-          background: "rgba(255,255,255,0.025)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 18, padding: "26px 26px",
-        }}>
-          <div style={{
-            fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: "rgba(245,247,250,0.45)", fontWeight: 600, marginBottom: 16,
-          }}>How the new gain is worked out</div>
-          {[
-            { label: "Sale price", note: "what the property actually sells for" },
-            { label: "− Indexed cost base", note: "what you paid, lifted by official CPI" },
-            { label: "= Taxed gain", note: "with a 30% minimum rate applied", accent: true },
-          ].map((r, i) => (
-            <div key={r.label} style={{
-              display: "flex", alignItems: "baseline", justifyContent: "space-between",
-              gap: 14, padding: "12px 0",
-              borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,0.05)",
-            }}>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 18, fontWeight: 500,
-                color: r.accent ? "#FB7185" : "#F5F7FA",
-              }}>{r.label}</div>
-              <div style={{
-                fontSize: 13, color: "rgba(245,247,250,0.5)", textAlign: "right", maxWidth: 280,
-              }}>{r.note}</div>
-            </div>
-          ))}
-        </div>
-
-        <p style={{
-          margin: "28px 0 0", maxWidth: 600, fontSize: 16, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.7)", textAlign: "center",
-        }}>
-          It can cut both ways — high official inflation can lower the
-          taxed gain. But you don't set that number, and you can't
-          predict it 30 years out. Bricks lets you test the gain under
-          different inflation paths, instead of hoping.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          NEW SCENE — THE 360-SQUARE PROOF (the product's signature view)
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-proof">
-        <SceneEyebrow tone="rose">This is what Bricks shows you</SceneEyebrow>
-        <SceneH size={44} style={{ maxWidth: 820, marginBottom: 16 }}>
-          360 squares. One per month.<br/>
-          <GradText>Thirty years, at a glance.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 34px", maxWidth: 600,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          Every Bricks property gets the same picture: red is a month
-          that costs you, green is a month that pays you. Tap between
-          the two — same suburb, same budget — and watch the post-budget
-          rules redraw the entire 30 years.
-        </p>
-
-        {/* toggle */}
-        <div style={{
-          display: "inline-flex", gap: 6, padding: 6,
-          background: "rgba(255,255,255,0.04)", borderRadius: 14,
-          border: "1px solid rgba(255,255,255,0.08)", marginBottom: 26,
-        }}>
-          {[
-            { id: "established", label: "Established — bought now" },
-            { id: "newbuild", label: "New build — bought now" },
-          ].map(opt => {
-            const active = proofType === opt.id;
-            return (
-              <button key={opt.id} onClick={() => setProofType(opt.id)}
-                style={{
-                  cursor: "pointer", border: "none",
-                  padding: "11px 20px", borderRadius: 10,
-                  fontSize: 13.5, fontWeight: 600, letterSpacing: -0.03,
-                  background: active
-                    ? "linear-gradient(135deg, rgba(244,63,94,0.22), rgba(244,63,94,0.08))"
-                    : "transparent",
-                  color: active ? "#FECDD3" : "rgba(245,247,250,0.55)",
-                  boxShadow: active ? "0 0 0 1px rgba(244,63,94,0.3) inset" : "none",
-                  transition: "all 0.2s",
-                }}>{opt.label}</button>
-            );
-          })}
-        </div>
-
-        {/* the brick */}
-        <div style={{
-          width: "100%", maxWidth: 600,
-          background: proofType === "newbuild" ? "rgba(34,197,94,0.04)" : "rgba(244,63,94,0.04)",
-          border: `1px solid ${proofType === "newbuild" ? "rgba(34,197,94,0.16)" : "rgba(244,63,94,0.14)"}`,
-          borderRadius: 20, padding: "28px 26px",
-          transition: "all 0.3s",
-        }}>
-          <div style={{ display: "flex", justifyContent: "center" }}>
-            <CashflowGrid cashflow={proofCashflow} cell={11} gap={2.5}
-              milestones={proofMilestones} showLabels={true} />
-          </div>
-          <div style={{
-            display: "flex", justifyContent: "space-between", marginTop: 24,
-            paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.06)",
-          }}>
-            <div style={{ textAlign: "left" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Year it pays you back</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 32, fontWeight: 500,
-                color: proofBreakEven ? "#4ADE80" : "#F87171",
-              }}>{proofBreakEven ? `Year ${proofBreakEven}` : "Never"}</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>Cost to hold, 30 years</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 32, fontWeight: 500,
-                color: proofType === "newbuild" ? "#4ADE80" : "#F87171",
-              }}>−${Math.round(proofBleed / 1000)}k</div>
-            </div>
-          </div>
-        </div>
-
-        <p style={{
-          margin: "28px 0 0", maxWidth: 560, fontSize: 16, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.7)", textAlign: "center",
-        }}>
-          No spreadsheet. No 40-tab model. The whole 30 years — after the
-          2026 budget — in one picture you can read in three seconds.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          NEW SCENE — THE COUNTDOWN: there is a clock
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-countdown">
-        <div style={{
-          position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
-        }}>
-          <div style={{
-            position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)",
-            width: 700, height: 400,
-            background: "radial-gradient(ellipse at center, rgba(244,63,94,0.14), transparent 68%)",
-          }} />
-        </div>
-
-        <SceneEyebrow tone="rose">The clock is already running</SceneEyebrow>
-        <SceneH size={48} style={{ maxWidth: 800, marginBottom: 16 }}>
-          The rules bite on<br/>
-          <GradText>1 July 2027.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 36px", maxWidth: 600,
-          fontSize: 18, lineHeight: 1.55, color: "rgba(245,247,250,0.62)", textAlign: "center",
-        }}>
-          Established properties bought after budget night are on the
-          new rules from this date. Every day of indecision narrows
-          the window.
-        </p>
-
-        <BudgetCountdownClock />
-
-        <p style={{
-          margin: "34px 0 0", maxWidth: 560, fontSize: 16.5, lineHeight: 1.55,
-          color: "rgba(245,247,250,0.65)", textAlign: "center",
-        }}>
-          You can't stop the clock. You can know exactly where each
-          property stands before it runs out.
-        </p>
-      </Scene>
-
-      {/* ─────────────────────────────────────────────────────────────────────
-          SCENE 8 — THE TURN / CTA
-      ───────────────────────────────────────────────────────────────────── */}
-      <Scene id="bgt-cta" style={{ minHeight: "100svh" }}>
-        <div style={{
-          position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
-        }}>
-          <div style={{
-            position: "absolute", bottom: "-10%", left: "50%", transform: "translateX(-50%)",
-            width: 900, height: 600,
-            background: "radial-gradient(ellipse at center, rgba(244,63,94,0.12), transparent 65%)",
-          }} />
-        </div>
-
-        <SceneH size={54} style={{ maxWidth: 820, marginBottom: 20 }}>
-          You can't change the budget.<br/>
-          <GradText>You can change<br/>which property you buy.</GradText>
-        </SceneH>
-        <p className="bgt-sub" style={{
-          margin: "0 0 40px", maxWidth: 560,
-          fontSize: 19, lineHeight: 1.55, color: "rgba(245,247,250,0.7)", textAlign: "center",
-        }}>
-          Bricks runs the post-budget numbers on every property — the
-          true holding cost, the break-even year, and which side of the
-          line it's on. Before you sign.
-        </p>
-
-        <motion.button
-          onClick={onBrowse}
-          whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-          style={{
-            cursor: "pointer", border: "none",
-            background: "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)",
-            color: "#FFFFFF",
-            borderRadius: 14, padding: "18px 32px",
-            fontSize: 17, fontWeight: 600, letterSpacing: -0.03,
-            display: "inline-flex", alignItems: "center", gap: 10,
-            boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset, 0 18px 44px -16px rgba(244,63,94,0.85)",
-          }}>
-          See how the numbers stack up after the budget
-          <ArrowRight size={18} strokeWidth={2.4} />
-        </motion.button>
-
-        <div style={{
-          marginTop: 28, display: "inline-flex", alignItems: "center", gap: 8,
-          fontSize: 14, color: "rgba(245,247,250,0.5)",
-        }}>
-          <Clock size={14} color="#FB7185" />
-          <span><strong style={{ color: "#FB7185", fontWeight: 600 }}>{daysUntilCliff} days</strong> until the rules change on 1 July 2027</span>
-        </div>
-      </Scene>
-
-    </motion.div>
-  );
-}
+export const ALL_PROPS = [...SEED_PROPS, ...MORE_PROPS, ...EXISTING_PROPS, ...EASTERN_PROPS, ...AGENT_PREVIEW_PROPS];
 
 // ─── BROWSE SCREEN — the searchable database ─────────────────────────────────
 function CountdownInline() {
@@ -6840,775 +6405,6 @@ function NegativeGearingExplainer({ sampleProperty }) {
   );
 }
 
-// Sort registry — single source of truth for available rankings.
-// All metrics are either (a) defensible math from documented rules (tax, break-even)
-// or (b) observable historical figures (10-year suburb growth, current yield, price).
-const SORT_OPTIONS = [
-  {
-    id: "positive",
-    label: "Fastest to break-even",
-    short: "FASTEST",
-    icon: Zap,
-    reason: (p) => {
-      const y = yearTurnsPositive(generateCashflow(p));
-      return y ? `Positive year ${y}` : "Never positive";
-    },
-  },
-  {
-    id: "score",
-    label: "Best all-rounder",
-    short: "ALL-ROUNDER",
-    icon: Star,
-    reason: (p) => {
-      const y = yearTurnsPositive(generateCashflow(p));
-      return y ? `Breaks even year ${y}` : "Long break-even";
-    },
-  },
-  {
-    id: "holdingCost",
-    label: "Costs you least",
-    short: "COSTS LEAST",
-    icon: TrendingUp,
-    reason: (p) => {
-      const cf = generateCashflow(p);
-      const bleed = cf.reduce((s, x) => s + (x < 0 ? -x : 0), 0);
-      return `${fmt(bleed)} total out-of-pocket`;
-    },
-  },
-  {
-    id: "taxbenefit",
-    label: "Best tax position",
-    short: "BEST TAX",
-    icon: Shield,
-    reason: (p) => `${fmt(Math.abs(ngBenefitValue(p)))} in tax benefits`,
-  },
-  {
-    id: "price-low",
-    label: "Lowest price",
-    short: "LOWEST PRICE",
-    icon: ArrowRight,
-    reason: (p) => `${fmt(p.price)} entry`,
-  },
-];
-
-// ─── MAP SCREEN ─── Custom pan/zoom SVG map with real Australia coastline.
-// Coastline derived from public-domain Natural Earth GeoJSON, simplified to ~110 points.
-// No external dependencies — works fully offline once shipped.
-
-// Real coastline coordinates [lon, lat] — Natural Earth admin0 Australia, simplified
-const AU_COASTLINE = [
-  [142.53,-10.69],[142.18,-11.21],[141.93,-11.78],[141.59,-13.20],[141.71,-14.40],
-  [141.55,-15.58],[140.95,-17.05],[140.77,-17.46],[140.18,-17.66],[139.20,-17.36],
-  [138.69,-17.05],[138.13,-16.81],[137.16,-16.07],[136.51,-15.74],[135.35,-14.92],
-  [134.39,-14.79],[133.32,-14.39],[132.86,-13.50],[132.16,-12.73],[131.41,-12.50],
-  [130.65,-12.42],[130.42,-12.86],[129.31,-14.95],[127.69,-15.45],[126.94,-15.34],
-  [126.31,-15.05],[124.75,-14.43],[124.16,-14.84],[124.95,-15.55],[124.70,-16.50],
-  [123.94,-16.41],[122.94,-16.95],[121.96,-17.96],[122.21,-18.85],[121.59,-19.65],
-  [121.05,-19.79],[120.04,-20.05],[119.18,-20.50],[118.04,-20.40],[117.36,-21.06],
-  [116.45,-20.91],[115.97,-21.55],[115.18,-22.45],[114.78,-22.99],[114.21,-23.94],
-  [113.51,-24.78],[113.40,-26.10],[114.20,-26.30],[114.16,-27.33],[114.04,-28.16],
-  [114.99,-30.04],[115.55,-31.20],[115.71,-31.93],[115.69,-33.13],[114.99,-34.20],
-  [115.79,-34.97],[117.07,-35.10],[118.05,-35.05],[119.08,-34.45],[119.93,-33.97],
-  [120.58,-33.93],[121.32,-33.51],[123.66,-33.89],[124.22,-32.96],[124.91,-32.74],
-  [127.13,-32.28],[129.00,-31.69],[130.94,-31.48],[131.83,-31.50],[132.92,-32.01],
-  [134.07,-32.85],[134.30,-32.96],[135.20,-34.49],[135.64,-34.94],[135.33,-34.39],
-  [134.74,-33.49],[136.05,-33.59],[136.94,-35.26],[137.36,-35.74],[138.07,-35.67],
-  [138.50,-35.59],[138.21,-34.38],[137.71,-34.96],[136.83,-33.69],[137.35,-32.93],
-  [137.45,-33.66],[138.07,-33.21],[138.46,-34.79],[139.65,-35.79],[140.97,-38.05],
-  [142.20,-38.41],[143.10,-38.81],[143.56,-38.95],[144.36,-38.21],[144.85,-38.51],
-  [145.46,-38.50],[146.50,-38.79],[146.96,-38.70],[147.42,-37.96],[148.30,-37.81],
-  [149.97,-37.43],[150.04,-36.42],[150.13,-35.65],[150.83,-34.94],[151.21,-34.13],
-  [151.27,-33.55],[152.51,-32.27],[152.50,-31.94],[153.03,-30.95],[153.11,-30.07],
-  [153.57,-28.62],[153.62,-28.10],[153.50,-27.46],[153.18,-25.94],[153.16,-25.21],
-  [152.07,-24.96],[150.79,-23.20],[150.49,-22.42],[149.10,-21.78],[148.85,-20.81],
-  [148.20,-19.95],[146.61,-19.13],[146.04,-18.27],[145.31,-17.06],[145.49,-16.29],
-  [144.93,-14.39],[143.95,-14.05],[143.55,-13.20],[143.79,-12.41],[143.43,-11.45],
-  [142.53,-10.69]
-];
-// Tasmania (separate polygon)
-const AU_TASMANIA = [
-  [144.62,-40.69],[144.74,-41.21],[145.05,-41.95],[145.30,-42.50],[145.18,-43.20],
-  [145.55,-43.49],[146.65,-43.62],[147.81,-43.55],[148.32,-42.65],[148.36,-41.27],
-  [148.31,-40.85],[147.97,-40.78],[147.13,-40.78],[146.45,-41.00],[145.66,-40.78],
-  [144.94,-40.71],[144.62,-40.69]
-];
-
-// Project lon/lat → SVG x/y for our viewBox 0..1000 wide
-// Australia bounds approx: lon 113-154, lat -10 to -44
-function projectLatLon(lon, lat) {
-  const x = (lon - 112.5) / (154 - 112.5) * 1000;
-  const y = (-(lat) - 10) / (44 - 10) * 700;
-  return { x, y };
-}
-function coordsToPath(coords) {
-  return coords.map((c, i) => {
-    const p = projectLatLon(c[0], c[1]);
-    return `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
-  }).join(" ") + " Z";
-}
-
-// Suburb-level aggregates derived from OUR data only — count, avg break-even, avg tax benefit, dominant build type.
-// No fabricated demographics.
-function aggregateBySuburb(properties) {
-  const groups = {};
-  for (const p of properties) {
-    if (!SUBURB_COORDS[p.suburb]) continue;
-    if (!groups[p.suburb]) groups[p.suburb] = [];
-    groups[p.suburb].push(p);
-  }
-  return Object.entries(groups).map(([suburb, props]) => {
-    const coord = SUBURB_COORDS[suburb];
-    const breakEvens = props.map(p => yearTurnsPositive(generateCashflow(p))).filter(x => x != null);
-    const avgBE = breakEvens.length ? Math.round(breakEvens.reduce((s, x) => s + x, 0) / breakEvens.length) : null;
-    const avgTax = Math.round(props.reduce((s, p) => s + ngBenefitValue(p), 0) / props.length);
-    const newCount = props.filter(p => p.build === "new").length;
-    const existingCount = props.length - newCount;
-    const avgScore = Math.round(props.reduce((s, p) => s + bricksScore(p), 0) / props.length);
-    const past10y = Math.round(historicalGrowth10y(props[0]));
-    return {
-      suburb, coord, props, avgBE, avgTax, newCount, existingCount, avgScore, past10y,
-      state: props[0].state,
-    };
-  });
-}
-
-function MapScreen({ properties, onSelectProperty, daysUntilCliff, wishlist, onToggleWishlist }) {
-  const [selectedId, setSelectedId] = useState(null);
-  const [selectedSuburb, setSelectedSuburb] = useState(null);
-  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 1000, h: 700 });
-  const svgRef = useRef(null);
-  const dragRef = useRef({ active: false, startX: 0, startY: 0, startVB: null });
-  const pinchRef = useRef({ active: false, startDist: 0, startVB: null });
-
-  const selected = useMemo(() => properties.find(p => p.id === selectedId), [properties, selectedId]);
-  const suburbAgg = useMemo(() => aggregateBySuburb(properties), [properties]);
-  const selectedSuburbData = useMemo(() =>
-    selectedSuburb ? suburbAgg.find(s => s.suburb === selectedSuburb) : null,
-    [suburbAgg, selectedSuburb]);
-
-  const counts = useMemo(() => {
-    let g = 0, a = 0, r = 0;
-    properties.forEach(p => {
-      const s = bricksScore(p);
-      if (s >= 65) g++; else if (s >= 45) a++; else r++;
-    });
-    return { g, a, r };
-  }, [properties]);
-
-  // Ranked properties for numbered markers
-  const ranked = useMemo(() =>
-    [...properties].sort((a, b) => bricksScore(b) - bricksScore(a))
-      .map((p, i) => ({ ...p, _rank: i + 1 })),
-    [properties]);
-
-  function dotMeta(p) {
-    const s = bricksScore(p);
-    if (s >= 65) return { fill: "#22C55E", glow: "rgba(34,197,94,0.55)" };
-    if (s >= 45) return { fill: "#F59E0B", glow: "rgba(245,158,11,0.55)" };
-    return            { fill: "#F43F5E", glow: "rgba(244,63,94,0.55)" };
-  }
-
-  // Auto-fit on first load to filtered properties
-  useEffect(() => {
-    if (properties.length === 0) return;
-    const coords = properties.map(p => SUBURB_COORDS[p.suburb]).filter(Boolean);
-    if (coords.length === 0) return;
-    const lons = coords.map(c => c.lon);
-    const lats = coords.map(c => c.lat);
-    const minLon = Math.min(...lons) - 1.5;
-    const maxLon = Math.max(...lons) + 1.5;
-    const minLat = Math.min(...lats) - 1.5;
-    const maxLat = Math.max(...lats) + 1.5;
-    const tl = projectLatLon(minLon, maxLat);
-    const br = projectLatLon(maxLon, minLat);
-    const padX = 50;
-    const padY = 50;
-    let w = Math.max(br.x - tl.x + padX * 2, 200);
-    let h = Math.max(br.y - tl.y + padY * 2, 200);
-    // Keep aspect roughly matching container
-    const aspect = 1000 / 700;
-    if (w / h > aspect) h = w / aspect;
-    else w = h * aspect;
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    setViewBox({ x: cx - w / 2, y: cy - h / 2, w, h });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [properties.length]);
-
-  // Pan + pinch handlers
-  function getPointer(e) {
-    if (e.touches && e.touches.length > 0) {
-      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    }
-    return { x: e.clientX, y: e.clientY };
-  }
-  function getDistance(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-  function handlePointerDown(e) {
-    if (e.touches && e.touches.length === 2) {
-      pinchRef.current = { active: true, startDist: getDistance(e.touches), startVB: { ...viewBox } };
-      dragRef.current.active = false;
-      return;
-    }
-    const p = getPointer(e);
-    dragRef.current = { active: true, startX: p.x, startY: p.y, startVB: { ...viewBox } };
-  }
-  function handlePointerMove(e) {
-    if (pinchRef.current.active && e.touches && e.touches.length === 2) {
-      e.preventDefault();
-      const dist = getDistance(e.touches);
-      const factor = pinchRef.current.startDist / dist;
-      const newW = Math.max(50, Math.min(1400, pinchRef.current.startVB.w * factor));
-      const newH = Math.max(35, Math.min(980, pinchRef.current.startVB.h * factor));
-      const cx = pinchRef.current.startVB.x + pinchRef.current.startVB.w / 2;
-      const cy = pinchRef.current.startVB.y + pinchRef.current.startVB.h / 2;
-      setViewBox({ x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH });
-      return;
-    }
-    if (!dragRef.current.active) return;
-    e.preventDefault?.();
-    const p = getPointer(e);
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const sx = dragRef.current.startVB.w / rect.width;
-    const sy = dragRef.current.startVB.h / rect.height;
-    const dx = (p.x - dragRef.current.startX) * sx;
-    const dy = (p.y - dragRef.current.startY) * sy;
-    setViewBox({
-      x: dragRef.current.startVB.x - dx,
-      y: dragRef.current.startVB.y - dy,
-      w: dragRef.current.startVB.w,
-      h: dragRef.current.startVB.h,
-    });
-  }
-  function handlePointerUp() {
-    dragRef.current.active = false;
-    pinchRef.current.active = false;
-  }
-  function handleWheel(e) {
-    e.preventDefault();
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / rect.width;
-    const my = (e.clientY - rect.top) / rect.height;
-    const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-    const newW = Math.max(50, Math.min(1400, viewBox.w * factor));
-    const newH = Math.max(35, Math.min(980, viewBox.h * factor));
-    // Zoom around cursor
-    const newX = viewBox.x + (viewBox.w - newW) * mx;
-    const newY = viewBox.y + (viewBox.h - newH) * my;
-    setViewBox({ x: newX, y: newY, w: newW, h: newH });
-  }
-  function zoomIn() {
-    const cx = viewBox.x + viewBox.w / 2;
-    const cy = viewBox.y + viewBox.h / 2;
-    const newW = Math.max(50, viewBox.w / 1.4);
-    const newH = Math.max(35, viewBox.h / 1.4);
-    setViewBox({ x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH });
-  }
-  function zoomOut() {
-    const cx = viewBox.x + viewBox.w / 2;
-    const cy = viewBox.y + viewBox.h / 2;
-    const newW = Math.min(1400, viewBox.w * 1.4);
-    const newH = Math.min(980, viewBox.h * 1.4);
-    setViewBox({ x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH });
-  }
-
-  // Visual sizing: scale dots inversely with zoom so they stay readable
-  const zoomLevel = 1000 / viewBox.w;
-  const dotSize = Math.max(14, Math.min(36, 18 / Math.sqrt(zoomLevel)));
-  const labelSize = Math.max(8, Math.min(20, 12 / Math.sqrt(zoomLevel)));
-  const cityLabelOpacity = zoomLevel < 1.8 ? 0.5 : 0.25;
-  const mainlandPath = useMemo(() => coordsToPath(AU_COASTLINE), []);
-  const tasmaniaPath = useMemo(() => coordsToPath(AU_TASMANIA), []);
-  const stateLabels = [
-    { lon: 134, lat: -25, label: "AUSTRALIA", size: 1.3, opacity: 0.18 },
-    { lon: 151.2, lat: -33.86, label: "SYDNEY", offsetX: 14, anchor: "start" },
-    { lon: 144.96, lat: -37.81, label: "MELBOURNE", offsetY: 16, anchor: "middle" },
-    { lon: 153.03, lat: -27.47, label: "BRISBANE", offsetX: 12, anchor: "start" },
-    { lon: 115.86, lat: -31.95, label: "PERTH", offsetX: -8, anchor: "end" },
-    { lon: 138.60, lat: -34.93, label: "ADELAIDE", offsetX: -8, anchor: "end" },
-    { lon: 147.32, lat: -42.88, label: "HOBART", offsetX: 12, anchor: "start" },
-    { lon: 130.84, lat: -12.46, label: "DARWIN", offsetX: 12, anchor: "start" },
-  ];
-
-  return (
-    <div style={{
-      position: "relative", width: "100%", height: "100%",
-      background: "radial-gradient(ellipse at 40% 60%, #0F1E33 0%, #07101C 70%, #050A12 100%)",
-    }}>
-      {/* The SVG map */}
-      <svg
-        ref={svgRef}
-        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-        preserveAspectRatio="xMidYMid meet"
-        onMouseDown={handlePointerDown}
-        onMouseMove={handlePointerMove}
-        onMouseUp={handlePointerUp}
-        onMouseLeave={handlePointerUp}
-        onTouchStart={handlePointerDown}
-        onTouchMove={handlePointerMove}
-        onTouchEnd={handlePointerUp}
-        onWheel={handleWheel}
-        onClick={() => { setSelectedId(null); setSelectedSuburb(null); }}
-        style={{
-          position: "absolute", inset: 0, width: "100%", height: "100%",
-          cursor: dragRef.current.active ? "grabbing" : "grab",
-          touchAction: "none",
-        }}>
-        <defs>
-          <linearGradient id="auFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#1E2A40" />
-            <stop offset="100%" stopColor="#13202F" />
-          </linearGradient>
-          <filter id="dotGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="2" />
-          </filter>
-        </defs>
-
-        {/* Coastline — real geometry */}
-        <path d={mainlandPath} fill="url(#auFill)" stroke="rgba(255,255,255,0.14)" strokeWidth={Math.max(0.5, 1.2 / Math.sqrt(zoomLevel))} strokeLinejoin="round" />
-        <path d={tasmaniaPath} fill="url(#auFill)" stroke="rgba(255,255,255,0.14)" strokeWidth={Math.max(0.5, 1.2 / Math.sqrt(zoomLevel))} strokeLinejoin="round" />
-
-        {/* Big country label — fades when zoomed in */}
-        {zoomLevel < 1.8 && (
-          <text
-            x={projectLatLon(134, -25).x} y={projectLatLon(134, -25).y}
-            fill="rgba(245,247,250,0.10)"
-            fontSize={50 / Math.sqrt(zoomLevel)}
-            fontWeight="800"
-            letterSpacing="0.2em"
-            textAnchor="middle"
-            pointerEvents="none"
-          >AUSTRALIA</text>
-        )}
-
-        {/* City labels */}
-        {stateLabels.filter(s => s.label !== "AUSTRALIA").map((s, i) => {
-          const p = projectLatLon(s.lon, s.lat);
-          return (
-            <text key={i}
-              x={p.x + (s.offsetX || 0)}
-              y={p.y + (s.offsetY || 0)}
-              fill={`rgba(245,247,250,${cityLabelOpacity})`}
-              fontSize={Math.max(7, 11 / Math.sqrt(zoomLevel))}
-              fontWeight="700"
-              letterSpacing="0.08em"
-              textAnchor={s.anchor || "middle"}
-              pointerEvents="none"
-            >{s.label}</text>
-          );
-        })}
-
-        {/* Suburb area overlays — soft circles below markers */}
-        {suburbAgg.map((s, i) => {
-          const p = projectLatLon(s.coord.lon, s.coord.lat);
-          const fill = s.avgScore >= 65 ? "#22C55E" : s.avgScore >= 45 ? "#F59E0B" : "#F43F5E";
-          // Radius scales with property count
-          const radius = (16 + Math.min(s.props.length, 4) * 4) / Math.sqrt(zoomLevel);
-          return (
-            <circle key={s.suburb}
-              cx={p.x} cy={p.y} r={radius}
-              fill={fill}
-              fillOpacity="0.10"
-              stroke={fill}
-              strokeOpacity="0.35"
-              strokeWidth={Math.max(0.4, 0.8 / Math.sqrt(zoomLevel))}
-              style={{ cursor: "pointer" }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedSuburb(s.suburb);
-                setSelectedId(null);
-              }}
-            />
-          );
-        })}
-
-        {/* Property markers — ranked */}
-        {ranked.map((p) => {
-          const coord = SUBURB_COORDS[p.suburb];
-          if (!coord) return null;
-          // Tiny per-id jitter so coincident markers don't fully overlap
-          const jx = ((p.id * 31) % 11 - 5) * 0.15;
-          const jy = ((p.id * 47) % 11 - 5) * 0.15;
-          const pt = projectLatLon(coord.lon, coord.lat);
-          const c = dotMeta(p);
-          const isSelected = selectedId === p.id;
-          const r = isSelected ? dotSize * 0.9 : dotSize * 0.7;
-          const showRank = p._rank <= 9 && bricksScore(p) >= 45;
-          return (
-            <g key={p.id}
-              transform={`translate(${pt.x + jx}, ${pt.y + jy})`}
-              style={{ cursor: "pointer" }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedId(p.id);
-                setSelectedSuburb(null);
-              }}
-            >
-              {/* Outer glow */}
-              <circle r={r * 1.6} fill={c.glow} opacity={isSelected ? 0.9 : 0.45} />
-              {/* Pulse ring for selected */}
-              {isSelected && (
-                <circle r={r * 1.6} fill="none" stroke={c.fill} strokeWidth="1.2" opacity="0.6">
-                  <animate attributeName="r" from={r * 1.6} to={r * 2.6} dur="1.4s" repeatCount="indefinite" />
-                  <animate attributeName="opacity" from="0.6" to="0" dur="1.4s" repeatCount="indefinite" />
-                </circle>
-              )}
-              {/* Main dot */}
-              <circle r={r} fill={c.fill} stroke="#0B0E14" strokeWidth={Math.max(1, 1.6 / Math.sqrt(zoomLevel))} />
-              {/* Rank number for top-9 */}
-              {showRank && (
-                <text
-                  y={r * 0.36}
-                  fontSize={r * 1.05}
-                  fontWeight="800"
-                  fill="#0B0E14"
-                  textAnchor="middle"
-                  pointerEvents="none"
-                  style={{ fontFamily: "-apple-system, sans-serif", letterSpacing: "-0.04em" }}
-                >{p._rank}</text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-
-      {/* Header overlay */}
-      <div style={{
-        position: "absolute", top: 14, left: 14, right: 14, zIndex: 400,
-        background: "rgba(11,14,20,0.86)", backdropFilter: "blur(14px)",
-        border: "1px solid rgba(255,255,255,0.06)",
-        borderRadius: 12, padding: "10px 12px",
-        pointerEvents: "none",
-      }}>
-        <div style={{ color: "#5C6477", fontSize: 9, fontWeight: 800, letterSpacing: 1.4, textTransform: "uppercase", marginBottom: 4 }}>
-          Post-budget map · {daysUntilCliff}d to act
-        </div>
-        <div style={{ color: "#F5F7FA", fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 8, lineHeight: 1.25 }}>
-          {properties.length} ranked properties · #1 = best
-        </div>
-        <div style={{ display: "flex", gap: 10, fontSize: 10, color: "#C5CAD6", flexWrap: "wrap" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: "#22C55E", boxShadow: "0 0 6px #22C55E" }} />
-            <span style={{ color: "#22C55E", fontWeight: 700 }}>{counts.g}</span> top
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: "#F59E0B" }} />
-            <span style={{ color: "#F59E0B", fontWeight: 700 }}>{counts.a}</span> decent
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: "#F43F5E" }} />
-            <span style={{ color: "#F43F5E", fontWeight: 700 }}>{counts.r}</span> avoid
-          </span>
-        </div>
-      </div>
-
-      {/* Zoom controls */}
-      <div style={{
-        position: "absolute", right: 14, top: 120, zIndex: 400,
-        display: "flex", flexDirection: "column", gap: 4,
-      }}>
-        <motion.button whileTap={{ scale: 0.92 }} onClick={zoomIn}
-          style={{
-            width: 34, height: 34, borderRadius: 8,
-            background: "rgba(11,14,20,0.86)", backdropFilter: "blur(14px)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            color: "#F5F7FA",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", fontSize: 18, fontWeight: 600, padding: 0,
-          }}>+</motion.button>
-        <motion.button whileTap={{ scale: 0.92 }} onClick={zoomOut}
-          style={{
-            width: 34, height: 34, borderRadius: 8,
-            background: "rgba(11,14,20,0.86)", backdropFilter: "blur(14px)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            color: "#F5F7FA",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", fontSize: 18, fontWeight: 600, padding: 0,
-          }}>−</motion.button>
-      </div>
-
-      {/* Suburb area popup */}
-      <AnimatePresence>
-        {selectedSuburbData && !selected && (
-          <motion.div
-            initial={{ y: 240, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 240, opacity: 0 }}
-            transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: "absolute", left: 12, right: 12, bottom: 12,
-              background: "#15171F",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 16, padding: 14,
-              zIndex: 500,
-              boxShadow: "0 -8px 24px rgba(0,0,0,0.45)",
-            }}>
-            <SuburbAreaCard data={selectedSuburbData} onClose={() => setSelectedSuburb(null)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Selected property mini card */}
-      <AnimatePresence>
-        {selected && (
-          <motion.div
-            initial={{ y: 320, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 320, opacity: 0 }}
-            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: "absolute", left: 12, right: 12, bottom: 12,
-              background: "#15171F",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 16, padding: 12,
-              zIndex: 500,
-              boxShadow: "0 -8px 24px rgba(0,0,0,0.45)",
-            }}>
-            <MapMiniCard
-              property={selected}
-              daysUntilCliff={daysUntilCliff}
-              wishlisted={wishlist?.has(selected.id)}
-              onToggleWishlist={onToggleWishlist}
-              onClose={() => setSelectedId(null)}
-              onOpen={() => onSelectProperty(selected.id)}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// Small popup card shown when a user taps the soft suburb area circle.
-// All facts here are aggregated from OUR property data — nothing fabricated.
-function SuburbAreaCard({ data, onClose }) {
-  const fill = data.avgScore >= 65 ? "#22C55E" : data.avgScore >= 45 ? "#F59E0B" : "#F43F5E";
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: "#5C6477", fontSize: 9, fontWeight: 800, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 3 }}>
-            Suburb overview
-          </div>
-          <div style={{ color: "#F5F7FA", fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
-            {data.suburb.split(",")[0]}
-          </div>
-          <div style={{ color: "#8B92A5", fontSize: 11.5, marginTop: 1 }}>
-            {data.suburb.split(",")[1]?.trim()} · {data.props.length} {data.props.length === 1 ? "property" : "properties"} tracked
-          </div>
-        </div>
-        <motion.button whileTap={{ scale: 0.9 }} onClick={onClose}
-          style={{
-            width: 32, height: 32, borderRadius: 999,
-            background: "rgba(255,255,255,0.10)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#F5F7FA", cursor: "pointer", padding: 0, flexShrink: 0,
-          }}>
-          <X size={18} strokeWidth={2.6} />
-        </motion.button>
-      </div>
-
-      {/* Stats grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-        <div style={{
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.05)",
-          borderRadius: 10, padding: "9px 11px",
-        }}>
-          <div style={{ color: "#8B92A5", fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 3 }}>
-            10-yr history
-          </div>
-          <div style={{ color: "#60A5FA", fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}>
-            +{data.past10y}%
-          </div>
-          <div style={{ color: "#5C6477", fontSize: 9.5, marginTop: 3 }}>Median observed</div>
-        </div>
-        <div style={{
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.05)",
-          borderRadius: 10, padding: "9px 11px",
-        }}>
-          <div style={{ color: "#8B92A5", fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 3 }}>
-            Avg break-even
-          </div>
-          <div style={{ color: fill, fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}>
-            {data.avgBE ? `Y${data.avgBE}` : "—"}
-          </div>
-          <div style={{ color: "#5C6477", fontSize: 9.5, marginTop: 3 }}>Across this suburb</div>
-        </div>
-        <div style={{
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.05)",
-          borderRadius: 10, padding: "9px 11px",
-        }}>
-          <div style={{ color: "#8B92A5", fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 3 }}>
-            Avg tax benefit
-          </div>
-          <div style={{ color: data.avgTax >= 0 ? "#22C55E" : "#F43F5E", fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}>
-            {data.avgTax >= 0 ? "+" : "–"}{fmt(Math.abs(data.avgTax))}
-          </div>
-          <div style={{ color: "#5C6477", fontSize: 9.5, marginTop: 3 }}>Over 30 years</div>
-        </div>
-        <div style={{
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.05)",
-          borderRadius: 10, padding: "9px 11px",
-        }}>
-          <div style={{ color: "#8B92A5", fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 3 }}>
-            Build mix
-          </div>
-          <div style={{ color: "#F5F7FA", fontSize: 14, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
-            <span style={{ color: "#22C55E" }}>{data.newCount}</span>
-            <span style={{ color: "#5C6477", fontSize: 11, margin: "0 4px" }}>new ·</span>
-            <span style={{ color: "#F87171" }}>{data.existingCount}</span>
-            <span style={{ color: "#5C6477", fontSize: 11, marginLeft: 4 }}>existing</span>
-          </div>
-          <div style={{ color: "#5C6477", fontSize: 9.5, marginTop: 3 }}>In the area</div>
-        </div>
-      </div>
-
-      <div style={{
-        background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px",
-        color: "#8B92A5", fontSize: 10.5, lineHeight: 1.5,
-      }}>
-        Tap any numbered marker to drill into a specific property.
-      </div>
-    </div>
-  );
-}
-
-function MapMiniCard({ property, daysUntilCliff, wishlisted, onToggleWishlist, onClose, onOpen }) {
-  const cashflow = useMemo(() => generateCashflow(property), [property]);
-  const milestones = useMemo(() => calcDollarMilestones(cashflow), [cashflow]);
-  const meta = useMemo(() => propertyMeta(property), [property]);
-  const ngLocked = useMemo(() => ngBenefitValue(property), [property]);
-  const isNew = property.build === "new";
-  const tier = scoreTier(bricksScore(property));
-
-  return (
-    <div>
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: "#F5F7FA", fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}>
-            {fmt(property.price)}
-          </div>
-          <div style={{ color: "#F5F7FA", fontSize: 12.5, fontWeight: 600, marginTop: 3 }}>
-            {property.name}
-          </div>
-          <div style={{ color: "#8B92A5", fontSize: 11, marginTop: 1 }}>
-            {property.suburb}
-          </div>
-          {/* Icon row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 5 }}>
-            <span style={{ color: "#C5CAD6", fontSize: 10.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
-              <Bed size={11} strokeWidth={2.2} />{meta.beds}
-            </span>
-            <span style={{ color: "#C5CAD6", fontSize: 10.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
-              <Bath size={11} strokeWidth={2.2} />{meta.baths}
-            </span>
-            <span style={{ color: "#C5CAD6", fontSize: 10.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
-              <Car size={11} strokeWidth={2.2} />{meta.parking}
-            </span>
-            <span style={{ color: "#C5CAD6", fontSize: 10.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}>
-              <Maximize2 size={10} strokeWidth={2.2} />{meta.area}m²
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
-          <motion.button whileTap={{ scale: 0.9 }} onClick={onClose}
-            style={{
-              width: 32, height: 32, borderRadius: 999,
-              background: "rgba(255,255,255,0.10)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#F5F7FA", cursor: "pointer", padding: 0,
-            }}>
-            <X size={18} strokeWidth={2.6} />
-          </motion.button>
-        </div>
-      </div>
-
-      {/* Status pills */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 9, flexWrap: "wrap" }}>
-        {isNew ? (
-          <div style={{
-            background: "rgba(34,197,94,0.18)", color: "#22C55E",
-            fontSize: 9, fontWeight: 800, letterSpacing: 0.3,
-            padding: "2px 6px", borderRadius: 4,
-            border: "1px solid rgba(34,197,94,0.30)",
-            textTransform: "uppercase",
-          }}>
-            ✓ Tax break · for life
-          </div>
-        ) : (
-          <div style={{
-            background: "rgba(244,63,94,0.18)", color: "#F43F5E",
-            fontSize: 9, fontWeight: 800, letterSpacing: 0.3,
-            padding: "2px 6px", borderRadius: 4,
-            border: "1px solid rgba(244,63,94,0.30)",
-            textTransform: "uppercase",
-          }}>
-            ⚠ Ends {daysUntilCliff}d
-          </div>
-        )}
-        <div style={{
-          background: isNew ? "rgba(34,197,94,0.08)" : "rgba(244,63,94,0.08)",
-          color: isNew ? "#22C55E" : "#F43F5E",
-          fontSize: 9.5, fontWeight: 700,
-          padding: "2px 6px", borderRadius: 4,
-          border: "1px solid rgba(255,255,255,0.05)",
-        }}>
-          {isNew ? "+" : "–"}{fmt(Math.abs(ngLocked))} tax {isNew ? "kept" : "lost"}
-        </div>
-      </div>
-
-      {/* The cashflow grid — the differentiator */}
-      <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
-        <CashflowGrid cashflow={cashflow} cols={30} rows={10} cell={7} gap={2} milestones={milestones} animate={false} />
-      </div>
-
-      {/* CTA + heart */}
-      <div style={{ display: "flex", gap: 8 }}>
-        {onToggleWishlist && (
-          <motion.button whileTap={{ scale: 0.92 }}
-            onClick={(e) => { e.stopPropagation(); onToggleWishlist(property.id); }}
-            style={{
-              width: 38, height: 38, borderRadius: 10,
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.06)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: wishlisted ? "#F43F5E" : "#F5F7FA",
-              cursor: "pointer", padding: 0, flexShrink: 0,
-            }}>
-            <Bookmark size={16} strokeWidth={2.4}
-              fill={wishlisted ? "#F43F5E" : "none"} color={wishlisted ? "#F43F5E" : "currentColor"} />
-          </motion.button>
-        )}
-        <motion.button whileTap={{ scale: 0.97 }}
-          onClick={onOpen}
-          style={{
-            flex: 1, background: "#F5F7FA", color: "#0B0E14",
-            border: "none", borderRadius: 10,
-            padding: "10px 14px",
-            fontSize: 13, fontWeight: 700, letterSpacing: "-0.01em",
-            cursor: "pointer",
-            display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-          }}>
-          View full details <ArrowRight size={14} strokeWidth={2.4} />
-        </motion.button>
-      </div>
-    </div>
-  );
-}
-
 // ─── Home-page referral band — full interactive what-if, like the drill-down ─
 function HomeCTABand({ exampleProperty }) {
   const { openReferral } = useReferral();
@@ -7636,7 +6432,7 @@ function HomeCTABand({ exampleProperty }) {
   return (
     <div style={{ marginTop: 40 }}>
       {/* — BUYER'S AGENT — */}
-      <div style={{
+      <div className="home-cta-band-panel" style={{
         background: "linear-gradient(165deg, rgba(244,63,94,0.13), rgba(251,146,60,0.035))",
         border: "1px solid rgba(251,113,133,0.24)",
         borderRadius: 22, padding: "26px 24px",
@@ -7714,7 +6510,7 @@ function HomeCTABand({ exampleProperty }) {
       </div>
 
       {/* — MORTGAGE BROKER — */}
-      <div style={{
+      <div className="home-cta-band-panel" style={{
         background: "linear-gradient(165deg, rgba(96,165,250,0.12), rgba(96,165,250,0.03))",
         border: "1px solid rgba(96,165,250,0.22)",
         borderRadius: 22, padding: "26px 24px", marginTop: 14,
@@ -7795,38 +6591,31 @@ function HomeCTABand({ exampleProperty }) {
 
 
 // ─── Site footer — credibility, navigation, legal ───────────────────────────
-function SiteFooter({ onTab, onLegal }) {
+function SiteFooter({ onTab, onLegal, onMethodology }) {
   const go = (screen) => () => onTab && onTab(screen);
   const legal = (section) => () => onLegal && onLegal(section);
   const columns = [
     {
-      heading: "Bricks",
+      heading: "Explore",
       links: [
         { label: "Research properties", action: go("browse") },
         { label: "Your shortlist", action: go("saved") },
+        { label: "Property map", action: go("map") },
+        { label: "Agency leaderboard", action: go("leaderboard") },
         { label: "2026 budget explained", action: go("budget") },
       ],
     },
     {
-      heading: "Tools",
+      heading: "For agents",
       links: [
-        { label: "30-year cashflow model", action: go("browse") },
-        { label: "Scenario Studio", action: go("browse") },
-        { label: "Download to spreadsheet", action: go("browse") },
-      ],
-    },
-    {
-      heading: "Company",
-      links: [
-        { label: "About Bricks", action: () => {} },
-        { label: "How we make money", action: () => {} },
-        { label: "Contact", action: () => {} },
+        { label: "Listing preview (private)", action: go("agent-preview") },
+        { label: "How we rank properties", action: onMethodology || (() => navigateTo({ type: "methodology" })) },
       ],
     },
     {
       heading: "Legal",
       links: [
-        { label: "Terms & Disclaimer", action: legal("terms") },
+        { label: "Terms & disclaimer", action: legal("terms") },
         { label: "Privacy policy", action: legal("privacy") },
         { label: "Financial disclaimer", action: legal("finance") },
       ],
@@ -7834,11 +6623,11 @@ function SiteFooter({ onTab, onLegal }) {
   ];
   return (
     <footer style={{
-      marginTop: 40, paddingTop: 36,
+      marginTop: 40, padding: "36px 28px 8px",
       borderTop: "1px solid rgba(255,255,255,0.07)",
     }}>
       <div className="footer-grid" style={{
-        display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 1fr", gap: 28,
+        display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 28,
         marginBottom: 36,
       }}>
         {/* brand block */}
@@ -7893,7 +6682,7 @@ function SiteFooter({ onTab, onLegal }) {
   );
 }
 
-function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onToggleWishlist, bracket, onBracket, onTab }) {
+function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onToggleWishlist, bracket, onBracket, onTab, initialViewMode = "list" }) {
   const [filterBuild, setFilterBuild] = useState("all");
   const [filterTier, setFilterTier] = useState("all");
   const [filterType, setFilterType] = useState("all");
@@ -7901,7 +6690,8 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
   const [showWishlistOnly, setShowWishlistOnly] = useState(false);
   const [sortBy, setSortBy] = useState("positive");
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [viewMode, setViewMode] = useState("list"); // list | map
+  const [viewMode, setViewMode] = useState(initialViewMode); // list | map
+  useEffect(() => { setViewMode(initialViewMode); }, [initialViewMode]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -7923,8 +6713,19 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
     properties.map(p => ({ ...p, marginalRate: bracketRates[bracket] || 0.32 })),
   [properties, bracket]);
 
+  const topBadgeById = useMemo(() => {
+    const m = new Map();
+    ratedProperties.forEach(p => {
+      const ins = getPropertyInsights(p, ratedProperties, SCORING_ENGINE);
+      if (ins.badges[0]) m.set(p.id, ins.badges[0].label);
+    });
+    return m;
+  }, [ratedProperties]);
+
   const filtered = useMemo(() => {
     let arr = ratedProperties.filter(p => p.status !== "owned");
+    // Agent-fed previews stay private — they only appear on the Listing Preview screen.
+    arr = arr.filter(p => !(p.source === "agent-preview" || p.agentPreview));
     if (showWishlistOnly) arr = arr.filter(p => wishlist.has(p.id));
     if (filterBuild !== "all") arr = arr.filter(p => p.build === filterBuild);
     if (filterTier !== "all")  arr = arr.filter(p => propertyTier(p).id === filterTier);
@@ -7963,43 +6764,171 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
     [filtered, safePage]
   );
 
-  // Example property for the home-page agent/broker what-ifs:
-  // once the user has shortlisted anything, use one of THEIR properties
-  // (randomised, re-picked when the shortlist changes); otherwise the
-  // top-ranked property in the current list.
-  const ctaExample = useMemo(() => {
-    const shortlisted = properties.filter(p => wishlist.has(p.id));
-    if (shortlisted.length > 0) {
-      return shortlisted[Math.floor(Math.random() * shortlisted.length)];
-    }
-    return filtered[0] || properties[0];
-  }, [properties, wishlist, filtered]);
-
-  // ─── MAP VIEW: full-bleed, replaces list when viewMode === 'map' ───
+  // ─── MAP VIEW: map is full-bleed; sort/filter UI floats on top of the map ──
+  // Earlier iteration had a separate toolbar bar above the map which (a) felt
+  // visually disconnected from the map and (b) ate vertical space, pushing
+  // the popup off the fold on shorter viewports. Now: the map fills the
+  // entire below-TopNav viewport, and the controls sit as a glass overlay.
   if (viewMode === "map") {
     return (
       <motion.div key="browse-map"
+        className="browse-map-screen"
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         transition={{ duration: 0.22 }}
-        style={{ position: "relative", height: "100%", overflow: "hidden" }}>
-        <MapScreen
-          properties={filtered}
-          onSelectProperty={onOpen}
-          daysUntilCliff={daysUntilCliff}
-          wishlist={wishlist}
-          onToggleWishlist={onToggleWishlist}
-        />
-        {/* Floating List toggle */}
+        style={{
+          position: "relative",
+          // The TopNav lives at top:18 with height:68 → its bottom edge sits
+          // around y:88. Pulling the map up to start right under the nav
+          // (rather than the previous 96px gap) gives the popup an extra row
+          // of headroom and tightens the dead band the user flagged.
+          marginTop: 88,
+          height: "calc(100dvh - 88px)",
+          minHeight: 480, overflow: "hidden",
+        }}>
+
+        {/* MAP — full bleed, fills the entire below-TopNav viewport */}
+        <div style={{ position: "absolute", inset: 0 }}>
+          <MapScreen
+            properties={filtered}
+            onSelectProperty={onOpen}
+            daysUntilCliff={daysUntilCliff}
+            wishlist={wishlist}
+            onToggleWishlist={onToggleWishlist}
+            sortBy={sortBy}
+          />
+        </div>
+
+        {/* FLOATING SORT/FILTER OVERLAY — glass card, sits on top of the map.
+            Anchored to the top so it can't overlap the popup at the bottom.
+            One-line heading explains what the row of pills actually does so
+            users know the pills re-rank the map. */}
+        <div className="map-controls-overlay" style={{
+          position: "absolute", top: 12, left: 12, right: 12,
+          zIndex: 420,
+          display: "flex", flexDirection: "column", gap: 8,
+          alignItems: "center",
+          pointerEvents: "none", // children opt in
+        }}>
+          <div style={{
+            pointerEvents: "auto",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+            background: "rgba(11,14,20,0.78)",
+            backdropFilter: "blur(18px) saturate(140%)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 16,
+            padding: "10px 12px",
+            boxShadow: "0 12px 32px -16px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03) inset",
+            maxWidth: "min(960px, 100%)",
+          }}>
+            <div style={{
+              fontSize: 10.5, letterSpacing: "0.18em", textTransform: "uppercase",
+              color: "rgba(245,247,250,0.55)", fontWeight: 600,
+              display: "inline-flex", alignItems: "center", gap: 6,
+            }}>
+              <Zap size={10} strokeWidth={2.6} color="#FB7185" fill="#FB7185" />
+              Rank the map by
+            </div>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8, flexWrap: "nowrap",
+              maxWidth: "100%", overflowX: "auto",
+              scrollbarWidth: "none",
+              WebkitOverflowScrolling: "touch",
+            }}>
+              <SortToolbar sortBy={sortBy} onSortBy={setSortBy} />
+              <motion.button whileTap={{ scale: 0.96 }}
+                onClick={() => setFiltersOpen(o => !o)}
+                style={{
+                  flexShrink: 0, cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  background: activeFilterCount > 0
+                    ? "linear-gradient(135deg, rgba(244,63,94,0.22) 0%, rgba(244,63,94,0.06) 100%)"
+                    : "rgba(255,255,255,0.06)",
+                  border: activeFilterCount > 0
+                    ? "1px solid rgba(244,63,94,0.4)"
+                    : "1px solid rgba(255,255,255,0.12)",
+                  color: activeFilterCount > 0 ? "#FECDD3" : "#F5F7FA",
+                  borderRadius: 999, padding: "8px 13px",
+                  fontSize: 12.5, fontWeight: 600, letterSpacing: -0.05,
+                  whiteSpace: "nowrap",
+                }}>
+                <SlidersHorizontal size={13} strokeWidth={2.2}
+                  color={activeFilterCount > 0 ? "#FB7185" : "rgba(245,247,250,0.7)"} />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span style={{
+                    background: "rgba(244,63,94,0.32)", color: "#FECDD3",
+                    fontSize: 10, fontWeight: 700,
+                    padding: "1px 6px", borderRadius: 999,
+                  }}>{activeFilterCount}</span>
+                )}
+              </motion.button>
+            </div>
+          </div>
+
+          {/* Floating filter panel — appears beneath the controls when opened */}
+          <AnimatePresence>
+            {filtersOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                style={{
+                  pointerEvents: "auto",
+                  background: "rgba(11,14,20,0.94)",
+                  backdropFilter: "blur(18px) saturate(140%)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 18,
+                  boxShadow: "0 24px 60px -16px rgba(0,0,0,0.7)",
+                  width: "min(720px, 100%)",
+                }}>
+                <div style={{ padding: "16px 16px 12px" }}>
+                  <FilterRow label="Property grade">
+                    <Chip active={filterTier === "all"} onClick={() => setFilterTier("all")}>All grades</Chip>
+                    <Chip active={filterTier === "bluechip"} onClick={() => setFilterTier("bluechip")}>★ Bluechip</Chip>
+                    <Chip active={filterTier === "growth"} onClick={() => setFilterTier("growth")}>↑ Growth</Chip>
+                    <Chip active={filterTier === "value"} onClick={() => setFilterTier("value")}>$ Value</Chip>
+                    <Chip active={filterTier === "balanced"} onClick={() => setFilterTier("balanced")}>Balanced</Chip>
+                  </FilterRow>
+                  <FilterRow label="Build">
+                    <Chip active={filterBuild === "all"} onClick={() => setFilterBuild("all")}>All</Chip>
+                    <Chip active={filterBuild === "new"} onClick={() => setFilterBuild("new")}>New · keeps tax break</Chip>
+                    <Chip active={filterBuild === "existing"} onClick={() => setFilterBuild("existing")}>Established</Chip>
+                  </FilterRow>
+                  <FilterRow label="State" last={true}>
+                    {states.map(s => (
+                      <Chip key={s} active={filterState === s} onClick={() => setFilterState(s)}>{s === "all" ? "All" : s}</Chip>
+                    ))}
+                  </FilterRow>
+                  {activeFilterCount > 0 && (
+                    <div style={{ textAlign: "center", marginTop: 8 }}>
+                      <motion.button whileTap={{ scale: 0.97 }}
+                        onClick={() => { setFilterBuild("all"); setFilterTier("all"); setFilterType("all"); setFilterState("all"); setShowWishlistOnly(false); }}
+                        style={{
+                          background: "transparent", color: "#F87171",
+                          border: "none", padding: "4px 12px",
+                          fontSize: 12, fontWeight: 600, cursor: "pointer",
+                        }}>
+                        Clear all
+                      </motion.button>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         <motion.button whileTap={{ scale: 0.94 }}
-          onClick={() => setViewMode("list")}
+          className="floating-map-list"
+          onClick={() => onTab("browse")}
           style={{
-            position: "absolute", bottom: 24, right: 16,
+            position: "absolute", bottom: 16, right: 16,
             background: "#F5F7FA", color: "#0B0E14",
             border: "none", borderRadius: 999, padding: "11px 16px",
             fontSize: 12.5, fontWeight: 700, letterSpacing: -0.1,
             display: "inline-flex", alignItems: "center", gap: 6,
             boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
-            cursor: "pointer", zIndex: 5,
+            cursor: "pointer", zIndex: 12,
           }}>
           <ListIcon size={14} strokeWidth={2.4} />
           List
@@ -8013,29 +6942,24 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
       initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }}
       transition={{ duration: 0.22 }}
       style={{ position: "relative" }}>
-      <div className="screen-content" style={{ padding: "0 32px 110px" }}>
-      {/* HERO BACKGROUND — topographic atmosphere with smooth fade into canvas */}
-      <div style={{
-        position: "absolute", top: 0, left: 0, right: 0, height: 780,
-        pointerEvents: "none", zIndex: 0,
-        overflow: "hidden",
-      }}>
-        <div style={{
+      {/* HERO BACKGROUND — full viewport width, outside padded content column */}
+      <div className="hero-bg-bleed browse-hero-bg" style={{ ...heroBgBleed, height: 780 }}>
+        <div className="hero-bg-image" style={{
           position: "absolute", inset: 0,
           backgroundImage: 'url("/the_bricks.png")',
           backgroundSize: "cover",
-          backgroundPosition: "center top",
+          backgroundPosition: "center bottom",
           opacity: 0.78,
         }} />
         {/* Top fade — keep nav clean */}
-        <div style={{
+        <div className="hero-bg-fade-top" style={{
           position: "absolute", top: 0, left: 0, right: 0, height: 120,
           background: "linear-gradient(to bottom, rgba(5,7,10,0.55), transparent)",
         }} />
         {/* Centre readability vignette + rose glow tucked in */}
-        <div style={{
+        <div className="hero-bg-vignette" style={{
           position: "absolute", inset: 0,
-          background: "radial-gradient(ellipse 800px 500px at 50% 30%, rgba(244,63,94,0.06), transparent 65%), radial-gradient(ellipse 1200px 600px at 50% 35%, transparent 0%, rgba(5,7,10,0.55) 80%)",
+          background: "radial-gradient(ellipse 55% 65% at 50% 30%, rgba(244,63,94,0.06), transparent 70%), radial-gradient(ellipse 120% 90% at 50% 38%, transparent 45%, rgba(5,7,10,0.5) 100%)",
         }} />
         {/* Bottom fade — smooth into canvas where cards live */}
         <div style={{
@@ -8044,6 +6968,7 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         }} />
       </div>
 
+      <div className="screen-content" style={{ padding: "0 32px 110px" }}>
       {/* HERO — single cohesive statement, centered. The Raycast move. */}
       <div className="hero-header" style={{
         position: "relative", zIndex: 1,
@@ -8060,12 +6985,13 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
             width: 40, height: 1,
             background: "linear-gradient(to right, transparent, rgba(245,247,250,0.28))",
           }} />
-          <span style={{
+          <span className="hero-eyebrow-text" style={{
             fontSize: 12, fontWeight: 600, letterSpacing: "0.18em", textTransform: "uppercase",
             color: "rgba(245,247,250,0.5)",
-            whiteSpace: "nowrap",
+            textAlign: "center", lineHeight: 1.45,
           }}>
-            Free Aussie property investment research
+            <span className="eyebrow-line">Free Aussie property</span>
+            <span className="eyebrow-line"> investment research</span>
           </span>
           <span style={{
             width: 40, height: 1,
@@ -8083,11 +7009,11 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         }}>
           <span className="h1-line1">Negative gearing just changed.</span>
           <span className="h1-break-desktop"><br/></span>
-          <span> </span>
-          <span>See which beautiful listings</span>
+          <span className="h1-break-mobile"><br/></span>
+          <span>See which beautiful Aussie listings</span>
           <span className="h1-break-desktop"><br/></span>
-          <span> </span>
-          <span style={{
+          <span className="h1-break-mobile"><br/></span>
+          <span className="h1-accent" style={{
             fontStyle: "italic",
             fontWeight: 500,
             background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 48%, #FB923C 100%)",
@@ -8098,7 +7024,7 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
             display: "inline-block",
             lineHeight: 1.16,
             paddingBottom: "0.1em",
-          }}>bleed cash for 30 years</span>
+          }}>now bleed cash for 30 years</span>
         </h1>
 
         {/* Sub line — names the budget, keeps the 30-year pain, two lines */}
@@ -8159,57 +7085,60 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
           })}
         </div>
 
-        {/* Search — icon toggle, expands a field below */}
-        <motion.button whileTap={{ scale: 0.94 }}
-          onClick={() => { setSearchOpen(o => !o); if (searchOpen) setSearchQuery(""); }}
-          style={{
-            cursor: "pointer", flexShrink: 0,
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 44, height: 44,
-            background: (searchOpen || searchQuery)
-              ? "linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(244,63,94,0.05) 100%)"
-              : "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset",
-            color: (searchOpen || searchQuery) ? "#FB7185" : "rgba(245,247,250,0.6)",
-            borderRadius: 999,
-            transition: "all 0.2s",
-          }}>
-          <Search size={16} strokeWidth={2.2} />
-        </motion.button>
+        <div className="bracket-actions">
+          {/* Search — icon toggle, expands a field below */}
+          <motion.button whileTap={{ scale: 0.94 }}
+            className="bracket-search-btn"
+            onClick={() => { setSearchOpen(o => !o); if (searchOpen) setSearchQuery(""); }}
+            style={{
+              cursor: "pointer", flexShrink: 0,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 44, height: 44,
+              background: (searchOpen || searchQuery)
+                ? "linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(244,63,94,0.05) 100%)"
+                : "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset",
+              color: (searchOpen || searchQuery) ? "#FB7185" : "rgba(245,247,250,0.6)",
+              borderRadius: 999,
+              transition: "all 0.2s",
+            }}>
+            <Search size={16} strokeWidth={2.2} />
+          </motion.button>
 
-        {/* Filters — pill, height-matched to the bracket panel */}
-        <motion.button whileTap={{ scale: 0.97 }} onClick={() => setFiltersOpen(!filtersOpen)}
-          className="bracket-filter-btn"
-          style={{
-            cursor: "pointer", flexShrink: 0,
-            display: "inline-flex", alignItems: "center", gap: 7,
-            background: activeFilterCount > 0
-              ? "linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(244,63,94,0.05) 100%)"
-              : "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            boxShadow: activeFilterCount > 0
-              ? "0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(244,63,94,0.28) inset"
-              : "0 1px 0 rgba(255,255,255,0.06) inset",
-            color: activeFilterCount > 0 ? "#FECDD3" : "rgba(245,247,250,0.72)",
-            borderRadius: 999,
-            padding: "12px 18px",
-            fontSize: 13, fontWeight: 600, letterSpacing: -0.05,
-            transition: "all 0.2s",
-          }}>
-          <SlidersHorizontal size={13} strokeWidth={2}
-            color={activeFilterCount > 0 ? "#FB7185" : "rgba(245,247,250,0.55)"} />
-          {filtersOpen ? "Hide filters" : "Filters"}
-          {activeFilterCount > 0 && (
-            <span style={{
-              background: "rgba(244,63,94,0.25)", color: "#FECDD3",
-              fontSize: 10, fontWeight: 700,
-              padding: "1px 6px", borderRadius: 999,
-              boxShadow: "0 0 0 1px rgba(244,63,94,0.35) inset",
-              marginLeft: 1,
-            }}>{activeFilterCount}</span>
-          )}
-        </motion.button>
+          {/* Filters — pill, height-matched to the bracket panel */}
+          <motion.button whileTap={{ scale: 0.97 }} onClick={() => setFiltersOpen(!filtersOpen)}
+            className="bracket-filter-btn"
+            style={{
+              cursor: "pointer", flexShrink: 0,
+              display: "inline-flex", alignItems: "center", gap: 7,
+              background: activeFilterCount > 0
+                ? "linear-gradient(135deg, rgba(244,63,94,0.16) 0%, rgba(244,63,94,0.05) 100%)"
+                : "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              boxShadow: activeFilterCount > 0
+                ? "0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(244,63,94,0.28) inset"
+                : "0 1px 0 rgba(255,255,255,0.06) inset",
+              color: activeFilterCount > 0 ? "#FECDD3" : "rgba(245,247,250,0.72)",
+              borderRadius: 999,
+              padding: "12px 18px",
+              fontSize: 13, fontWeight: 600, letterSpacing: -0.05,
+              transition: "all 0.2s",
+            }}>
+            <SlidersHorizontal size={13} strokeWidth={2}
+              color={activeFilterCount > 0 ? "#FB7185" : "rgba(245,247,250,0.55)"} />
+            {filtersOpen ? "Hide filters" : "Filters"}
+            {activeFilterCount > 0 && (
+              <span style={{
+                background: "rgba(244,63,94,0.25)", color: "#FECDD3",
+                fontSize: 10, fontWeight: 700,
+                padding: "1px 6px", borderRadius: 999,
+                boxShadow: "0 0 0 1px rgba(244,63,94,0.35) inset",
+                marginLeft: 1,
+              }}>{activeFilterCount}</span>
+            )}
+          </motion.button>
+        </div>
       </div>
 
       {/* ─── SEARCH — expands when the search icon is tapped ─── */}
@@ -8264,47 +7193,8 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         )}
       </AnimatePresence>
 
-      <div className="sort-row" style={{
-        position: "relative", zIndex: 1,
-        marginBottom: 28,
-        display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap",
-      }}>
-        {/* segmented control — one dark track, rose pill marks the active sort */}
-        <div className="sort-segment" style={{
-          display: "inline-flex", alignItems: "center", gap: 2,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.10)",
-          boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset",
-          borderRadius: 999, padding: 4,
-        }}>
-          {SORT_OPTIONS.map(s => {
-            const active = sortBy === s.id;
-            const SortIcon = s.icon;
-            return (
-              <button key={s.id} onClick={() => setSortBy(s.id)}
-                style={{
-                  position: "relative",
-                  background: active
-                    ? "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)"
-                    : "transparent",
-                  color: active ? "#FFFFFF" : "rgba(245,247,250,0.6)",
-                  border: "none",
-                  borderRadius: 999, padding: "9px 15px",
-                  fontSize: 13, fontWeight: active ? 700 : 500, letterSpacing: -0.05,
-                  cursor: "pointer", whiteSpace: "nowrap",
-                  transition: "background 0.2s, color 0.2s",
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  boxShadow: active
-                    ? "0 1px 0 rgba(255,255,255,0.22) inset, 0 6px 18px -6px rgba(244,63,94,0.9)"
-                    : "none",
-                }}>
-                <SortIcon size={13} strokeWidth={active ? 2.6 : 2}
-                  color={active ? "#FFFFFF" : "rgba(245,247,250,0.45)"} />
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
+      <div className="sort-row" style={{ position: "relative", zIndex: 1, marginBottom: 28 }}>
+        <SortToolbar sortBy={sortBy} onSortBy={setSortBy} />
       </div>
 
 
@@ -8375,6 +7265,7 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
             key={p.id}
             property={p}
             goals={goals}
+            topBadgeLabel={topBadgeById.get(p.id)}
             onOpen={() => onOpen(p.id)}
             daysUntilCliff={daysUntilCliff}
             wishlisted={wishlist.has(p.id)}
@@ -8534,14 +7425,13 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         </div>
       )}
 
-      {/* Home-page referral CTAs — agent + broker */}
-      <HomeCTABand exampleProperty={ctaExample} />
+      {/* Home-page referral CTAs removed — agent-first product */}
       </div>
 
       {/* Floating Map toggle — sticks to viewport bottom-right, hidden on mobile */}
       <motion.button whileTap={{ scale: 0.94 }}
         className="floating-map"
-        onClick={() => setViewMode("map")}
+        onClick={() => onTab("map")}
         style={{
           position: "fixed", bottom: 24, right: 24,
           background: "rgba(10,12,16,0.78)",
