@@ -9,7 +9,7 @@
  */
 
 export const MODEL_DEFAULTS = Object.freeze({
-  rate: 0.066,
+  rate: 0.0639,
   deposit: 0.20,
   rentGrowth: 0.030,
   vacancyWeeks: 2,
@@ -23,6 +23,10 @@ export const MODEL_DEFAULTS = Object.freeze({
   div40NewBuildBase: 0.035,
   div40DiminishingRate: 0.20,
   vacancyFraction: 2 / 52,
+  legalsBase: 2000,
+  buildingPestEstablished: 500,
+  sellingCostsPct: 0.03,
+  cgtDiscount: 0.50,
 });
 
 // Land tax — annual, by state, on (estimated) unimproved land value (FY2025-26).
@@ -72,6 +76,153 @@ export function isApartment(property) {
   return t.includes("apartment") || t.includes("unit") || t.includes("walk-up") || t.includes("tower");
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ACQUISITION COSTS — year-zero cash outlay an investor actually writes.
+// Sources: state revenue offices (FY2025-26 schedules), Genworth LMI table.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Investor stamp duty (transfer duty) on a property purchase.
+ * Returns AUD. Assumes investor purchase (no FHB exemptions).
+ * Foreign-purchaser surcharges are NOT included.
+ */
+export function stampDuty({ price, state, isInvestor = true }) {
+  const p = price;
+  let duty = 0;
+  switch (state) {
+    case "NSW": {
+      if (p <= 14_000) duty = p * 0.0125;
+      else if (p <= 32_000) duty = 175 + 0.015 * (p - 14_000);
+      else if (p <= 85_000) duty = 445 + 0.0175 * (p - 32_000);
+      else if (p <= 319_000) duty = 1_372.5 + 0.035 * (p - 85_000);
+      else if (p <= 1_064_000) duty = 9_562.5 + 0.045 * (p - 319_000);
+      else if (p <= 3_757_000) duty = 43_087.5 + 0.055 * (p - 1_064_000);
+      else duty = 191_202 + 0.07 * (p - 3_757_000);
+      break;
+    }
+    case "VIC": {
+      if (p <= 25_000) duty = p * 0.014;
+      else if (p <= 130_000) duty = 350 + 0.024 * (p - 25_000);
+      else if (p <= 960_000) duty = 2_870 + 0.06 * (p - 130_000);
+      else if (p <= 2_000_000) duty = p * 0.055;
+      else duty = 110_000 + 0.065 * (p - 2_000_000);
+      break;
+    }
+    case "QLD": {
+      if (p <= 5_000) duty = 0;
+      else if (p <= 75_000) duty = 0.015 * (p - 5_000);
+      else if (p <= 540_000) duty = 1_050 + 0.035 * (p - 75_000);
+      else if (p <= 1_000_000) duty = 17_325 + 0.045 * (p - 540_000);
+      else duty = 38_025 + 0.0575 * (p - 1_000_000);
+      if (isInvestor) duty += Math.max(0, p - 5_000) * 0.02;
+      break;
+    }
+    case "SA": {
+      if (p <= 12_000) duty = p * 0.01;
+      else if (p <= 30_000) duty = 120 + 0.02 * (p - 12_000);
+      else if (p <= 50_000) duty = 480 + 0.03 * (p - 30_000);
+      else if (p <= 100_000) duty = 1_080 + 0.035 * (p - 50_000);
+      else if (p <= 200_000) duty = 2_830 + 0.04 * (p - 100_000);
+      else if (p <= 250_000) duty = 6_830 + 0.0425 * (p - 200_000);
+      else if (p <= 300_000) duty = 8_955 + 0.0475 * (p - 250_000);
+      else if (p <= 500_000) duty = 11_330 + 0.05 * (p - 300_000);
+      else duty = 21_330 + 0.055 * (p - 500_000);
+      break;
+    }
+    case "WA": {
+      if (p <= 120_000) duty = p * 0.019;
+      else if (p <= 150_000) duty = 2_280 + 0.0285 * (p - 120_000);
+      else if (p <= 360_000) duty = 3_135 + 0.038 * (p - 150_000);
+      else if (p <= 725_000) duty = 11_115 + 0.0475 * (p - 360_000);
+      else duty = 28_453 + 0.0515 * (p - 725_000);
+      break;
+    }
+    case "ACT": {
+      if (p <= 200_000) duty = p * 0.0118;
+      else if (p <= 300_000) duty = 2_360 + 0.022 * (p - 200_000);
+      else if (p <= 500_000) duty = 4_560 + 0.034 * (p - 300_000);
+      else if (p <= 750_000) duty = 11_360 + 0.0432 * (p - 500_000);
+      else if (p <= 1_000_000) duty = 22_160 + 0.0532 * (p - 750_000);
+      else if (p <= 1_455_000) duty = 35_460 + 0.0632 * (p - 1_000_000);
+      else duty = p * 0.045;
+      break;
+    }
+    case "TAS": {
+      if (p <= 3_000) duty = 50;
+      else if (p <= 25_000) duty = 50 + 0.0175 * (p - 3_000);
+      else if (p <= 75_000) duty = 435 + 0.0225 * (p - 25_000);
+      else if (p <= 200_000) duty = 1_560 + 0.035 * (p - 75_000);
+      else if (p <= 375_000) duty = 5_935 + 0.04 * (p - 200_000);
+      else if (p <= 725_000) duty = 12_935 + 0.0425 * (p - 375_000);
+      else duty = 27_810 + 0.045 * (p - 725_000);
+      break;
+    }
+    case "NT": {
+      if (p <= 525_000) duty = (0.06571441 * Math.pow(p / 1000, 2)) + 15 * (p / 1000);
+      else if (p <= 3_000_000) duty = p * 0.0495;
+      else if (p <= 5_000_000) duty = p * 0.0575;
+      else duty = p * 0.0595;
+      break;
+    }
+    default: duty = p * 0.045;
+  }
+  return Math.max(0, Math.round(duty));
+}
+
+/**
+ * Lenders Mortgage Insurance — capitalised, ~Genworth scale.
+ * Only applies when LVR > 80%.
+ */
+export function lmiCost({ loan, propertyValue }) {
+  if (!propertyValue || propertyValue <= 0) return 0;
+  const lvr = loan / propertyValue;
+  if (lvr <= 0.80) return 0;
+  // Simplified band schedule (% of loan), approximates Genworth/QBE tables.
+  let pct;
+  if (lvr <= 0.82) pct = 0.0072;
+  else if (lvr <= 0.85) pct = 0.0098;
+  else if (lvr <= 0.88) pct = 0.0145;
+  else if (lvr <= 0.90) pct = 0.0192;
+  else if (lvr <= 0.92) pct = 0.0285;
+  else if (lvr <= 0.95) pct = 0.0367;
+  else pct = 0.0420;
+  return Math.round(loan * pct);
+}
+
+/**
+ * Total year-zero cash outlay required to settle the property.
+ * Returns line items + total. Caller decides whether to capitalise LMI
+ * into the loan or treat as cash.
+ */
+export function acquisitionCosts({
+  price,
+  state = "NSW",
+  deposit = MODEL_DEFAULTS.deposit,
+  build = "new",
+  isInvestor = true,
+  capitaliseLMI = false,
+}) {
+  const duty = stampDuty({ price, state, isInvestor });
+  const loan = price * (1 - deposit);
+  const lmi = lmiCost({ loan, propertyValue: price });
+  const legals = MODEL_DEFAULTS.legalsBase;
+  const buildingPest = build === "new" ? 0 : MODEL_DEFAULTS.buildingPestEstablished;
+  const depositCash = price * deposit;
+  const lmiCash = capitaliseLMI ? 0 : lmi;
+  const total = depositCash + duty + legals + buildingPest + lmiCash;
+  return {
+    deposit: Math.round(depositCash),
+    stampDuty: duty,
+    lmi,
+    lmiCash: Math.round(lmiCash),
+    legals,
+    buildingPest,
+    total: Math.round(total),
+    loan: Math.round(loan + (capitaliseLMI ? lmi : 0)),
+    lvr: loan / price,
+  };
+}
+
 export function piMonthlyRepayment(loan, annualRate, years) {
   const r = annualRate / 12;
   const n = years * 12;
@@ -81,9 +232,27 @@ export function piMonthlyRepayment(loan, annualRate, years) {
 
 /**
  * 360-month after-tax cashflow series.
- * Accepts a property-like object (or a {price, yieldPct, growthPct, rate, deposit, ...}).
+ *
+ * Backwards-compatible: returns a plain number[] of monthly cashflows.
+ * For richer outputs (acquisition cash, equity, CGT-on-exit, carried-forward losses)
+ * use generateScenario() — which calls this internally then layers metadata on top.
+ *
+ * 2026 budget treatment:
+ *   - New builds: full negative gearing (losses × marginalRate refunded each year).
+ *   - Established builds: losses are QUARANTINED — they can't offset other income but
+ *     accumulate and reduce future positive rental income (and eventually CGT on sale).
+ *     We track the carry-forward bucket internally and apply it the moment the
+ *     property turns positive. This is materially more accurate than the old hard-zero.
  */
 export function generateCashflow(input) {
+  return generateScenario(input).monthly;
+}
+
+/**
+ * Full scenario: monthly cashflow + acquisition + equity + CGT-on-exit.
+ * All numbers are nominal AUD unless noted.
+ */
+export function generateScenario(input) {
   const {
     price, yieldPct, growthPct = 5,
     rate = MODEL_DEFAULTS.rate,
@@ -94,11 +263,21 @@ export function generateCashflow(input) {
     months = 360,
     loanType = MODEL_DEFAULTS.loanType,
     type,
+    capitaliseLMI = false,
+    sellYear = null,
+    // PPOR → IP transition. When > 0, the first `pporYears` years are treated
+    // as owner-occupier: no rent income, no NG, no depreciation tax effect — just
+    // the carrying cost of owning. After that, the property converts to an IP
+    // and normal investor mechanics resume.
+    // The 6-year absence rule means if total years-rented ≤ 6 with no other PPOR,
+    // CGT can still be exempt on sale — we surface this as a UI note rather than
+    // automatically apply it (the user's circumstances vary).
+    pporYears = 0,
   } = input;
   const property = { type, state, price, build };
 
-  const arr = [];
-  const loan = price * (1 - deposit);
+  const acq = acquisitionCosts({ price, state, deposit, build, capitaliseLMI });
+  const loan = acq.loan;
   const rentGrowth = MODEL_DEFAULTS.rentGrowth;
   const vacancyAdj = 1 - MODEL_DEFAULTS.vacancyFraction;
 
@@ -109,21 +288,48 @@ export function generateCashflow(input) {
   const landValue = price * landFr;
   const landTaxYr = landTaxAnnual({ state, landValue });
 
+  // Div 43 (capital works) — built on actual construction cost, claimable for 40 years
+  // from completion. New = full schedule. Established post-1987 = remaining years on
+  // the surveyor's schedule; we simplify with a half schedule for "existing".
   const constructionCost = price * MODEL_DEFAULTS.constructionPctOfPrice;
-  const div43Annual = constructionCost * 0.025;
+  const div43Annual = constructionCost * 0.025 * (build === "new" ? 1 : 0.5);
 
-  const div40Base = build === "new" ? price * MODEL_DEFAULTS.div40NewBuildBase : 0;
+  // Div 40 (plant & equipment) — only available on new builds. Base is a % of
+  // CONSTRUCTION cost (not full price), diminishing-value method.
+  const div40Base = build === "new"
+    ? constructionCost * MODEL_DEFAULTS.div40NewBuildBase
+    : 0;
 
   const piRepaymentM = piMonthlyRepayment(loan, rate, MODEL_DEFAULTS.loanTermYears);
   let loanBalance = loan;
 
-  const ngAllowed = build === "new";
+  // 2026 budget: NG losses on new builds are refundable each year.
+  // For established builds, losses are quarantined and carried forward — they
+  // reduce future positive rental income (and eventually CGT) but DO NOT produce
+  // a cash refund in the year they're incurred.
+  const ngRefundable = build === "new";
+
+  const arr = [];
+  const monthlyDetail = [];
+  let carryForwardLoss = 0;
+  let cumulativeDiv43 = 0;
+  let cumulativeDiv40 = 0;
+  let totalCashflow = 0;
+
+  const pporMonths = Math.max(0, Math.min(months, Math.round(pporYears * 12)));
 
   for (let m = 0; m < months; m++) {
     const yr = m / 12;
     const yearIdx = Math.floor(yr);
+    const isPporPhase = m < pporMonths;
+    // IP year index resets when the property converts from PPOR to IP — that's
+    // when depreciation and the rent clock start counting.
+    const ipYearIdx = isPporPhase ? 0 : Math.max(0, yearIdx - Math.floor(pporMonths / 12));
 
-    const annualGrossRent = price * (yieldPct / 100) * Math.pow(1 + rentGrowth, yr);
+    const rentRefYears = isPporPhase ? 0 : yearIdx - Math.floor(pporMonths / 12);
+    const annualGrossRent = isPporPhase
+      ? 0
+      : price * (yieldPct / 100) * Math.pow(1 + rentGrowth, rentRefYears);
     const annualNetRent = annualGrossRent * vacancyAdj;
     const rentMonthly = annualNetRent / 12;
 
@@ -136,22 +342,41 @@ export function generateCashflow(input) {
 
     const cashCostsMFixed = (price * cashCostsPct) / 12;
     const cashCostsMRentLinked = (annualGrossRent * (MODEL_DEFAULTS.mgmtPctOfRent + MODEL_DEFAULTS.maintPctOfRent)) / 12;
-    const landTaxM = landTaxYr / 12;
+    const landTaxM = isPporPhase ? 0 : landTaxYr / 12;
     const totalCashCostsM = cashCostsMFixed + cashCostsMRentLinked + landTaxM;
 
-    const div43M = (yearIdx < 40 ? div43Annual : 0) / 12;
-    const div40YearlyDeduction = div40Base * MODEL_DEFAULTS.div40DiminishingRate
-      * Math.pow(1 - MODEL_DEFAULTS.div40DiminishingRate, yearIdx);
+    // Depreciation only counts as an IP. During PPOR years it accrues no tax effect.
+    const div43Available = !isPporPhase && ipYearIdx < 40;
+    const div43M = div43Available ? div43Annual / 12 : 0;
+    const div40YearlyDeduction = isPporPhase
+      ? 0
+      : div40Base * MODEL_DEFAULTS.div40DiminishingRate
+        * Math.pow(1 - MODEL_DEFAULTS.div40DiminishingRate, ipYearIdx);
     const div40M = div40YearlyDeduction / 12;
     const totalDepreciationM = div43M + div40M;
 
-    const taxableIncomeM = rentMonthly - interestM - totalCashCostsM - totalDepreciationM;
-    const taxBenefitM = (taxableIncomeM < 0 && ngAllowed)
-      ? (-taxableIncomeM) * marginalRate
-      : 0;
-    const taxOwedM = taxableIncomeM > 0
-      ? taxableIncomeM * marginalRate
-      : 0;
+    cumulativeDiv43 += div43M;
+    cumulativeDiv40 += div40M;
+
+    let taxBenefitM = 0;
+    let taxOwedM = 0;
+
+    if (!isPporPhase) {
+      const taxableIncomeM = rentMonthly - interestM - totalCashCostsM - totalDepreciationM;
+      if (taxableIncomeM < 0) {
+        if (ngRefundable) {
+          taxBenefitM = (-taxableIncomeM) * marginalRate;
+        } else {
+          carryForwardLoss += -taxableIncomeM;
+        }
+      } else if (taxableIncomeM > 0) {
+        const offset = Math.min(taxableIncomeM, carryForwardLoss);
+        carryForwardLoss -= offset;
+        const stillTaxable = taxableIncomeM - offset;
+        taxOwedM = stillTaxable * marginalRate;
+      }
+    }
+    // PPOR phase: no income tax effects. The owner just pays the mortgage and costs.
 
     const cashflowM =
         rentMonthly
@@ -162,8 +387,71 @@ export function generateCashflow(input) {
       - taxOwedM;
 
     arr.push(cashflowM);
+    monthlyDetail.push({
+      rent: rentMonthly,
+      interest: interestM,
+      principal: principalM,
+      cashCosts: totalCashCostsM,
+      depreciation: totalDepreciationM,
+      taxBenefit: taxBenefitM,
+      taxOwed: taxOwedM,
+      net: cashflowM,
+      phase: isPporPhase ? "ppor" : "ip",
+    });
+    totalCashflow += cashflowM;
   }
-  return arr;
+
+  // CGT exit modelling — sale at end of `sellYear` (if provided) or at year 30 by default.
+  const exitYear = sellYear || 30;
+  const exitMonth = Math.min(months, exitYear * 12);
+  const exitYrFraction = exitMonth / 12;
+  const salePrice = price * Math.pow(1 + (growthPct / 100), exitYrFraction);
+  const sellingCosts = salePrice * MODEL_DEFAULTS.sellingCostsPct;
+
+  // Cost base adjustment: capital works claimed reduces the cost base (ATO rule).
+  // Plant & equipment Div 40 doesn't reduce cost base (it's plant, not capital works).
+  const div43ClaimedToExit = Math.min(exitMonth, 40 * 12)
+    ? cumulativeDiv43 * (Math.min(exitMonth, 40 * 12) / months)
+    : 0;
+  const adjustedCostBase = price - div43ClaimedToExit;
+  const grossGain = Math.max(0, salePrice - sellingCosts - adjustedCostBase);
+
+  // Apply any remaining carried-forward NG loss against the gain (the 2026 quarantine
+  // policy explicitly allows this on disposal).
+  const gainAfterCarried = Math.max(0, grossGain - carryForwardLoss);
+  const carriedUsedOnSale = Math.min(carryForwardLoss, grossGain);
+
+  // 50% CGT discount for individuals holding >12 months. Note: the 2026 budget
+  // floated a reduction to 40% for established properties — we keep 50% as the
+  // default and surface the alternate scenario in the UI rather than baking it in.
+  const taxableGain = gainAfterCarried * MODEL_DEFAULTS.cgtDiscount;
+  const cgtTax = taxableGain * marginalRate;
+
+  const loanBalanceAtExit = loanType === "pi" ? loanBalance : (price * (1 - deposit));
+  const netProceeds = salePrice - sellingCosts - cgtTax - loanBalanceAtExit;
+  const equityAtExit = salePrice - loanBalanceAtExit;
+
+  return {
+    monthly: arr,
+    monthlyDetail,
+    totalCashflow,
+    acquisition: acq,
+    exit: {
+      sellYear: exitYear,
+      salePrice: Math.round(salePrice),
+      sellingCosts: Math.round(sellingCosts),
+      adjustedCostBase: Math.round(adjustedCostBase),
+      grossGain: Math.round(grossGain),
+      carryForwardLoss: Math.round(carryForwardLoss),
+      carriedUsedOnSale: Math.round(carriedUsedOnSale),
+      taxableGain: Math.round(taxableGain),
+      cgtTax: Math.round(cgtTax),
+      loanBalanceAtExit: Math.round(loanBalanceAtExit),
+      equityAtExit: Math.round(equityAtExit),
+      netProceeds: Math.round(netProceeds),
+    },
+    inputs: { price, yieldPct, growthPct, rate, deposit, marginalRate, build, state, loanType },
+  };
 }
 
 export function calcAchievements(cashflow, goals) {
@@ -230,6 +518,105 @@ export function week1Cost(cashflow) {
 }
 
 /** Dollar value of NG eligibility over 30 years (new vs same property as established). */
+// ════════════════════════════════════════════════════════════════════════════
+// RETURNS — IRR + cash-on-cash + multiple. Sophisticated-investor metrics
+// derived from the same scenario the rest of the app uses, so numbers match.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Compute the internal rate of return of a cashflow series given an initial
+ * outlay and a terminal value. Cashflows are in months; we annualise the
+ * result so it can be reported as a typical % per year.
+ *
+ * Uses bisection (robust, no derivative needed). Returns a decimal (0.087
+ * = 8.7% p.a.) or null if the series doesn't have a sign change in 30 years
+ * (meaning no IRR exists).
+ */
+export function irrMonthly(cashflows, terminalValue = 0) {
+  if (!cashflows?.length) return null;
+  const series = [...cashflows];
+  series[series.length - 1] = (series[series.length - 1] || 0) + terminalValue;
+
+  const npv = (rate) => {
+    let v = 0;
+    for (let i = 0; i < series.length; i++) v += series[i] / Math.pow(1 + rate, i);
+    return v;
+  };
+
+  let lo = -0.999 / 12;
+  let hi = 1.0 / 12;
+  let fLo = npv(lo);
+  let fHi = npv(hi);
+  if (Number.isNaN(fLo) || Number.isNaN(fHi)) return null;
+  if (fLo * fHi > 0) return null;
+  for (let i = 0; i < 90; i++) {
+    const mid = (lo + hi) / 2;
+    const fMid = npv(mid);
+    if (!Number.isFinite(fMid)) return null;
+    if (Math.abs(fMid) < 1e-2) return Math.pow(1 + mid, 12) - 1;
+    if (fLo * fMid < 0) { hi = mid; fHi = fMid; }
+    else { lo = mid; fLo = fMid; }
+  }
+  const monthly = (lo + hi) / 2;
+  return Math.pow(1 + monthly, 12) - 1;
+}
+
+/**
+ * Compose returns metrics for a scenario.
+ * Inputs:
+ *   scenario  — output of generateScenario()
+ *   horizonYears — how long the user plans to hold (defaults to 30)
+ *
+ * Output:
+ *   {
+ *     cashOnCash,        // year-1 net cashflow / total cash invested
+ *     irrCashflowOnly,   // IRR ignoring sale (pure income return)
+ *     irrAllIn,          // IRR including sale at horizon
+ *     moneyMultiple,     // (total cashflow + exit equity) / total cash in
+ *     totalCashIn,       // acquisition + any negative monthly bleed
+ *     totalCashOut,      // any positive monthly cashflow + sale proceeds
+ *   }
+ */
+export function computeReturns(scenario, horizonYears = 30) {
+  if (!scenario?.monthly?.length) return null;
+  const months = Math.min(scenario.monthly.length, horizonYears * 12);
+  const window = scenario.monthly.slice(0, months);
+
+  const acqTotal = scenario.acquisition?.total || 0;
+  const y1Net = window.slice(0, 12).reduce((s, x) => s + x, 0);
+  const totalBleed = window.reduce((s, x) => s + (x < 0 ? -x : 0), 0);
+  const totalPositive = window.reduce((s, x) => s + (x > 0 ? x : 0), 0);
+  const totalCashIn = acqTotal + totalBleed;
+
+  // Cash-on-cash — most investors define it as year-1 (rough but standard)
+  const cashOnCash = acqTotal > 0 ? y1Net / acqTotal : 0;
+
+  // IRR — series with initial outlay then monthly cashflows
+  const seriesCashflowOnly = [-acqTotal, ...window];
+  const irrCashflowOnly = irrMonthly(seriesCashflowOnly, 0);
+
+  // IRR all-in — adds exit equity (after CGT, after selling costs, less remaining loan)
+  // The scenario.exit object reports netProceeds (sale - costs - cgt - remaining loan)
+  // We add the deposit BACK to that because we already counted it as a year-0 outflow.
+  const exitProceeds = (scenario.exit?.netProceeds || 0)
+    + (scenario.acquisition?.deposit || 0);
+  const irrAllIn = irrMonthly(seriesCashflowOnly, exitProceeds);
+
+  const moneyMultiple = totalCashIn > 0
+    ? (totalPositive + (scenario.exit?.equityAtExit || 0)) / totalCashIn
+    : 0;
+
+  return {
+    cashOnCash,
+    irrCashflowOnly,
+    irrAllIn,
+    moneyMultiple,
+    totalCashIn: Math.round(totalCashIn),
+    totalPositive: Math.round(totalPositive),
+    y1Net: Math.round(y1Net),
+  };
+}
+
 export function ngBenefitValue(property) {
   const cfNew = generateCashflow({ ...property, build: "new" });
   const cfExisting = generateCashflow({ ...property, build: "existing" });

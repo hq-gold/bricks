@@ -5,6 +5,11 @@ import { getSuburbStats } from "./suburbData.js";
 import { getPropertyInsights, createScoringEngine } from "./propertyInsights.js";
 import { BadgeShelf } from "./components/Badge.jsx";
 import ShareStoryModal from "./components/ShareStoryModal.jsx";
+import { loadStoredGoals } from "./components/GoalsOnboarding.jsx";
+import MatchMe from "./components/MatchMe.jsx";
+import GoalsScreen from "./screens/GoalsScreen.jsx";
+import ConciergeNudge, { trackPropertyOpen } from "./components/ConciergeNudge.jsx";
+import BudgetCTABand from "./components/BudgetCTABand.jsx";
 import { AgentShareHeader, AgentContactDock, ListingAgentPromo } from "./components/AgentShareChrome.jsx";
 import { parseRoute, navigateTo } from "./routing.js";
 import MethodologyScreen from "./screens/MethodologyScreen.jsx";
@@ -470,10 +475,13 @@ function ReferralProvider({ children }) {
 
 // ─── the capture flow itself ────────────────────────────────────────────────
 function ReferralCapture({ kind = "agent", property, context, onClose }) {
-  const isAgent = kind !== "broker";
-  const accent = isAgent ? "#FB7185" : "#93C5FD";
-  const accentDeep = isAgent ? "#C9374F" : "#3B82F6";
-  const accentSoft = isAgent ? "rgba(244,63,94,0.13)" : "rgba(96,165,250,0.13)";
+  const isAgent = kind === "agent";
+  const isBroker = kind === "broker";
+  const isExpert = kind === "expert";
+  // Visual accent palette per kind
+  const accent = isBroker ? "#93C5FD" : isExpert ? "#A78BFA" : "#FB7185";
+  const accentDeep = isBroker ? "#3B82F6" : isExpert ? "#7C3AED" : "#C9374F";
+  const accentSoft = isBroker ? "rgba(96,165,250,0.13)" : isExpert ? "rgba(167,139,250,0.13)" : "rgba(244,63,94,0.13)";
 
   // step: 0 = name, 1 = contact, 2 = stage (qualifier), 3 = success
   const [step, setStep] = useState(0);
@@ -534,10 +542,16 @@ function ReferralCapture({ kind = "agent", property, context, onClose }) {
     else if (step === 1 && emailValid && phoneValid) setStep(2);
   }
 
-  const headline = isAgent ? "Match with a buyer's agent" : "Match with a mortgage broker";
-  const blurb = isAgent
-    ? `A buyer's agent who knows ${suburb} — to negotiate and find stock you can't see. Free to be matched.`
-    : `A mortgage broker who'll hunt the whole market for your rate and structure. Free, no obligation.`;
+  const headline = isExpert
+    ? "Walk through your shortlist with a Bricks expert"
+    : isBroker
+      ? "Match with a mortgage broker"
+      : "Match with a buyer's agent";
+  const blurb = isExpert
+    ? `15 minutes, free. We'll model your situation against the properties you've opened and tell you which actually pays you back — and which to walk away from.`
+    : isBroker
+      ? `A mortgage broker who'll hunt the whole market for your rate and structure. Free, no obligation.`
+      : `A buyer's agent who knows ${suburb} — to negotiate and find stock you can't see. Free to be matched.`;
 
   return (
     <motion.div
@@ -608,11 +622,13 @@ function ReferralCapture({ kind = "agent", property, context, onClose }) {
                 background: accentSoft, borderRadius: 99, padding: "5px 11px",
                 marginBottom: 12,
               }}>
-                {isAgent
-                  ? <Users size={13} color={accent} strokeWidth={2.2} />
-                  : <Briefcase size={13} color={accent} strokeWidth={2.2} />}
+                {isExpert
+                  ? <Sparkles size={13} color={accent} strokeWidth={2.2} />
+                  : isBroker
+                    ? <Briefcase size={13} color={accent} strokeWidth={2.2} />
+                    : <Users size={13} color={accent} strokeWidth={2.2} />}
                 <span style={{ fontSize: 11, fontWeight: 700, color: accent, letterSpacing: "0.04em" }}>
-                  {isAgent ? "BUYER'S AGENT" : "MORTGAGE BROKER"}
+                  {isExpert ? "BRICKS EXPERT" : isBroker ? "MORTGAGE BROKER" : "BUYER'S AGENT"}
                 </span>
               </div>
               <div style={{
@@ -2053,7 +2069,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
   const [vars, setVars] = useState({
     price: propIn.price,
     deposit: 20,
-    rate: 6.6,
+    rate: 6.39,
     loanType: "io",
     rentPerWeek: Math.round((propIn.price * (propIn.yieldPct / 100)) / 52),
     rentGrowth: 3.0,
@@ -2061,6 +2077,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     marginalRate: 39,
     build: propIn.build,
     state: propIn.state || "NSW",
+    pporYears: 0,
   });
   const set = (k) => (v) => setVars(s => ({ ...s, [k]: v }));
 
@@ -2068,7 +2085,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
   const baseVars = useMemo(() => ({
     price: propIn.price,
     deposit: 20,
-    rate: 6.6,
+    rate: 6.39,
     loanType: "io",
     rentPerWeek: Math.round((propIn.price * (propIn.yieldPct / 100)) / 52),
     rentGrowth: 3.0,
@@ -2076,6 +2093,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     marginalRate: 39,
     build: propIn.build,
     state: propIn.state || "NSW",
+    pporYears: 0,
   }), [propIn]);
   const scenarioDirty = useMemo(
     () => JSON.stringify(vars) !== JSON.stringify(baseVars), [vars, baseVars]);
@@ -2092,6 +2110,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     state: vars.state,
     loanType: vars.loanType,
     type: propIn.type,
+    pporYears: vars.pporYears || 0,
   }), [vars, propIn.type]);
   const cashflow = useMemo(() => generateCashflow(cfConfig), [cfConfig]);
 
@@ -2107,6 +2126,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     state: vars.state,
     loanType: vars.loanType,
     type: propIn.type,
+    pporYears: vars.pporYears || 0,
   }), [vars, propIn.type]);
 
   // ── Verdict figures ────────────────────────────────────────────────────────
@@ -2119,6 +2139,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
     () => cashflow.slice(0, 12).reduce((s, x) => s + x, 0) / 12, [cashflow]);
   const y1Weekly = y1Monthly * 12 / 52;
   const gap = Math.round(lifetimeNet - lifetimeNetAlt);
+
 
   // ── Equity projection — property value growth minus loan paydown ───────────
   // Clearly a forecast: value compounds at growthPct; loan amortises (P&I) or
@@ -2504,15 +2525,15 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   display: "grid", gridTemplateColumns: "1.45fr 1fr", gap: 10,
                   marginBottom: 18,
                 }}>
-                  {/* hero */}
+                  {/* hero — tightened height so cashflow + verdict stay above the fold */}
                   <div style={{
                     borderRadius: 18, overflow: "hidden",
                     position: "relative", background: "#15171F",
-                    minHeight: 340,
+                    aspectRatio: "16 / 11",
                   }}>
                     <img src={gallery[0]} alt={propIn.name}
                       onError={(e) => { e.currentTarget.style.display = "none"; }}
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", minHeight: 340 }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                     />
                     <div style={{
                       position: "absolute", left: 16, bottom: 16,
@@ -2545,11 +2566,11 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                     {[1, 2, 3].map((n, i) => (
                       <div key={n} style={{
                         borderRadius: 14, overflow: "hidden",
-                        background: "#15171F", position: "relative", minHeight: 162,
+                        background: "#15171F", position: "relative",
                       }}>
                         <img src={gallery[n] || gallery[0]} alt={`${propIn.name} photo ${n + 1}`}
                           onError={(e) => { e.currentTarget.style.display = "none"; }}
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", minHeight: 162 }}
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                         />
                         {i === 2 && (
                           <div style={{
@@ -2973,6 +2994,62 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 </div>
               </div>
             </div>
+
+            {/* ─── Your plan: pure investment vs PPOR-then-rent ────────────────── */}
+            <div style={{
+              marginTop: 18, paddingTop: 16,
+              borderTop: "1px solid rgba(255,255,255,0.06)",
+            }}>
+              <div style={{
+                display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                marginBottom: 8, flexWrap: "wrap", gap: 6,
+              }}>
+                <div style={{ fontSize: 12, color: "rgba(245,247,250,0.55)", fontWeight: 500 }}>
+                  Your plan
+                </div>
+                {vars.pporYears > 0 && (
+                  <div style={{
+                    fontSize: 10.5, color: "#FECDD3", fontWeight: 600,
+                    letterSpacing: "-0.005em",
+                  }}>
+                    Living in it for {vars.pporYears} year{vars.pporYears === 1 ? "" : "s"}, then renting
+                  </div>
+                )}
+              </div>
+              <div style={{
+                display: "flex", gap: 4, padding: 4,
+                background: "rgba(255,255,255,0.04)", borderRadius: 9,
+                border: "1px solid rgba(255,255,255,0.09)",
+                marginBottom: 10,
+              }}>
+                {[
+                  { id: 0, l: "Pure investment" },
+                  { id: 1, l: "Live in 1yr → rent" },
+                  { id: 3, l: "Live in 3yr → rent" },
+                  { id: 6, l: "Live in 6yr → rent" },
+                ].map(o => {
+                  const on = (vars.pporYears || 0) === o.id;
+                  return (
+                    <button key={o.id} onClick={() => set("pporYears")(o.id)}
+                      style={{
+                        cursor: "pointer", border: "none", borderRadius: 6, flex: 1,
+                        padding: "8px 10px", fontSize: 11, fontWeight: 600,
+                        background: on ? "rgba(255,255,255,0.12)" : "transparent",
+                        color: on ? "#F5F7FA" : "rgba(245,247,250,0.5)",
+                        boxShadow: on ? "0 1px 0 rgba(255,255,255,0.08) inset" : "none",
+                        letterSpacing: "-0.01em",
+                      }}>{o.l}</button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 10, color: "rgba(245,247,250,0.45)", lineHeight: 1.5 }}>
+                {vars.pporYears === 0
+                  ? "Pure investment — rented from day one to a tenant."
+                  : vars.pporYears <= 6
+                    ? `Live in it as your home for ${vars.pporYears} year${vars.pporYears === 1 ? "" : "s"}, then convert to a rental. Under the 6-year absence rule you may still qualify for the main residence CGT exemption — confirm with your accountant.`
+                    : `Live in it as your home for ${vars.pporYears} years, then convert to a rental.`}
+              </div>
+            </div>
           </div>
 
           {/* Agent share — live brick under sliders so changes are visible without scrolling up */}
@@ -3045,7 +3122,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
         {!isAgentPreview && (
         <>
         {/* ════════════════════════════════════════════════════════════════
-            ACT 2.5 — HOW IT COMPARES: 4 other real properties
+            ACT 2.5 — HOW IT COMPARES: 3 other real properties
         ════════════════════════════════════════════════════════════════ */}
         <div style={{
           background: "rgba(255,255,255,0.025)",
@@ -3060,7 +3137,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             fontFamily: 'ui-serif, Georgia, serif', fontSize: 24, fontWeight: 500,
             color: "#F5F7FA", letterSpacing: "-0.02em", marginBottom: 6, lineHeight: 1.2,
           }}>
-            Four other properties, same money in play
+            Three other properties, same money in play
           </div>
           <p style={{
             fontSize: 13.5, color: "rgba(245,247,250,0.55)", margin: "0 0 22px", lineHeight: 1.5,
@@ -3082,111 +3159,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
         {/* ════════════════════════════════════════════════════════════════
             BUDGET CTA — looping Sydney video, half-width, links to budget
         ════════════════════════════════════════════════════════════════ */}
-        <div style={{
-          background: "rgba(255,255,255,0.025)",
-          border: "1px solid rgba(255,255,255,0.07)",
-          borderRadius: 24, overflow: "hidden",
-          marginTop: 56, marginBottom: 56,
-        }}>
-          <div className="cta-grid" style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", alignItems: "stretch",
-          }}>
-            {/* video half */}
-            <div style={{ position: "relative", minHeight: 280, background: "#0A0D12" }}>
-              <video
-                src="/budget-bg.mp4"
-                autoPlay muted loop playsInline
-                style={{
-                  position: "absolute", inset: 0, width: "100%", height: "100%",
-                  objectFit: "cover",
-                }}
-              />
-              {/* soft top vignette + right edge fade into the text panel */}
-              <div style={{
-                position: "absolute", inset: 0,
-                background: "linear-gradient(180deg, rgba(5,7,10,0.5) 0%, rgba(5,7,10,0.15) 35%, rgba(5,7,10,0.5) 100%), linear-gradient(100deg, rgba(5,7,10,0) 55%, rgba(5,7,10,0.6) 100%)",
-              }} />
-              {/* live countdown — the dramatic centrepiece */}
-              <div style={{
-                position: "absolute", inset: 0,
-                display: "flex", flexDirection: "column",
-                alignItems: "center", justifyContent: "center",
-                padding: "0 24px",
-              }}>
-                <div style={{
-                  fontSize: 10.5, letterSpacing: "0.22em", textTransform: "uppercase",
-                  color: "rgba(245,247,250,0.7)", fontWeight: 700,
-                  marginBottom: 10,
-                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
-                }}>
-                  Negative gearing cliff
-                </div>
-                <div className="cta-countdown" style={{
-                  fontFamily: 'ui-serif, Georgia, serif',
-                  fontSize: 64, fontWeight: 600, letterSpacing: "-0.04em",
-                  lineHeight: 1, color: "#FFFFFF",
-                  textShadow: "0 4px 24px rgba(0,0,0,0.7)",
-                }}>
-                  {daysUntilCliff}
-                </div>
-                <div style={{
-                  fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase",
-                  color: "rgba(245,247,250,0.85)", fontWeight: 600,
-                  marginTop: 6,
-                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
-                }}>
-                  days until 1 July 2027
-                </div>
-                <div style={{
-                  marginTop: 14, height: 1, width: 60,
-                  background: "linear-gradient(90deg, transparent, rgba(251,113,133,0.7), transparent)",
-                }} />
-                <div style={{
-                  marginTop: 10,
-                  fontSize: 11.5, lineHeight: 1.45,
-                  color: "rgba(245,247,250,0.7)", textAlign: "center",
-                  maxWidth: 240,
-                  textShadow: "0 2px 8px rgba(0,0,0,0.7)",
-                }}>
-                  When established property loses negative gearing.
-                </div>
-              </div>
-            </div>
-            {/* text half */}
-            <div style={{ padding: "40px 36px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              <div style={{
-                fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
-                color: "#FB7185", fontWeight: 600, marginBottom: 12,
-              }}>The 2026 budget</div>
-              <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 30, fontWeight: 500,
-                color: "#F5F7FA", letterSpacing: "-0.025em", lineHeight: 1.18, marginBottom: 14,
-              }}>
-                The rules just changed. This is the story behind every number here.
-              </div>
-              <p style={{
-                fontSize: 14.5, lineHeight: 1.6, color: "rgba(245,247,250,0.62)", margin: "0 0 24px",
-              }}>
-                Negative gearing, capital gains tax, the July 2027 cliff — the budget
-                rewrote what makes a property worth owning. Walk through what it means.
-              </p>
-              <motion.button
-                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={() => onOpenBudget && onOpenBudget()}
-                style={{
-                  cursor: "pointer", border: "none", alignSelf: "flex-start",
-                  background: "linear-gradient(135deg, #FB7185 0%, #E5485F 55%, #C9374F 100%)",
-                  color: "#FFFFFF", borderRadius: 13, padding: "14px 24px",
-                  fontSize: 14.5, fontWeight: 600, letterSpacing: -0.02,
-                  display: "inline-flex", alignItems: "center", gap: 9,
-                  boxShadow: "0 1px 0 rgba(255,255,255,0.22) inset, 0 14px 34px -14px rgba(244,63,94,0.85)",
-                }}>
-                See the 2026 budget story
-                <ArrowRight size={16} strokeWidth={2.4} />
-              </motion.button>
-            </div>
-          </div>
-        </div>
+        <BudgetCTABand onOpenBudget={onOpenBudget} marginTop={56} marginBottom={56} />
 
         {/* ════════════════════════════════════════════════════════════════
             ACT 4 — LISTING AGENT
@@ -3460,56 +3433,6 @@ function OwnedDetail({ property, goals, onBack }) {
           Bricks Watch · keeping {property.name} on track since {owned.date}
         </div>
       </div>
-    </motion.div>
-  );
-}
-
-function GoalsScreen({ goals, properties }) {
-  const goalHits = goals.map(g => {
-    let earliest = null, earliestProp = null;
-    properties.forEach(p => {
-      const ach = calcAchievements(generateCashflow(p), [g])[0];
-      if (ach.yearHit !== null && (earliest === null || ach.yearHit < earliest)) {
-        earliest = ach.yearHit; earliestProp = p;
-      }
-    });
-    return { ...g, earliest, earliestProp };
-  });
-  return (
-    <motion.div key="goals" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 16 }}
-      transition={{ duration: 0.22 }}
-      style={{ padding: "60px 16px 110px", height: "100%", overflowY: "auto" }}>
-      <div style={{ marginBottom: 18 }}>
-        <div style={{ color: "#5C6477", fontSize: 10, fontWeight: 600, letterSpacing: 2.5, textTransform: "uppercase" }}>T H E   W H Y</div>
-        <div style={{ color: "#F5F7FA", fontSize: 23, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 3 }}>Your goals</div>
-        <div style={{ color: "#8B92A5", fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
-          Real life things your property pays for. Bricks tracks when each one is covered.
-        </div>
-      </div>
-      {goalHits.map((g, i) => (
-        <motion.div key={g.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 + i * 0.04 }}
-          style={{ background: "#15171F", border: "1px solid rgba(255,255,255,0.04)",
-            borderRadius: 16, padding: 14, marginBottom: 10,
-            display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 12,
-            background: "rgba(255,255,255,0.05)",
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{g.emoji}</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ color: "#F5F7FA", fontSize: 14, fontWeight: 600 }}>{g.name}</div>
-            <div style={{ color: "#8B92A5", fontSize: 11.5, marginTop: 1 }}>
-              {fmtFull(g.amount)} / {g.type === "yearly" ? "year" : "one-time"}
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            {g.earliest ? (
-              <>
-                <div style={{ color: COLORS[g.earliestProp.color].hex, fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em" }}>Year {g.earliest}</div>
-                <div style={{ color: "#5C6477", fontSize: 10, marginTop: -2 }}>{g.earliestProp.name.split(" ")[0]}</div>
-              </>
-            ) : <div style={{ color: "#5C6477", fontSize: 11 }}>Add more</div>}
-          </div>
-        </motion.div>
-      ))}
     </motion.div>
   );
 }
@@ -4244,7 +4167,7 @@ function SettingsScreen({ onTab }) {
           {[
             { l: "Your marginal tax rate", v: "39%" },
             { l: "Region", v: "Australia" },
-            { l: "Loan rate assumption", v: "6.50%" },
+            { l: "Loan rate assumption", v: "6.39%" },
             { l: "Default deposit", v: "20%" },
             { l: "Currency", v: "AUD" },
           ].map((r, i, arr) => (
@@ -4528,13 +4451,20 @@ function SavedScreen({ properties, wishlist, onToggleWishlist, onOpen, onFindMor
 // page that uses it. The clip is in /public/budget-bg.mp4.
 
 function AppInner() {
+  const { openReferral } = useReferral();
   const [route, setRoute] = useState(() => parseRoute());
   const [screen, setScreen] = useState("browse");
   const [legalSection, setLegalSection] = useState("terms");
   const [openId, setOpenId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [properties, setProperties] = useState(ALL_PROPS);
-  const [goals, setGoals] = useState(SEED_GOALS);
+  // Goals start empty — only the user's own picks (saved via the Goals page)
+  // populate this. We used to seed five demo goals, but that caused duplicate
+  // markers on the cashflow brick whenever a user picked the same goal again
+  // from the catalogue (different ID schema), and it surprised buyers who
+  // hadn't set any goals yet.
+  const [goals, setGoals] = useState(() => loadStoredGoals() || []);
+  const [showMatchMe, setShowMatchMe] = useState(false);
   const [wishlist, setWishlist] = useState(new Set());
   const [bracket, setBracket] = useState("standard");
   const [detailReturn, setDetailReturn] = useState("browse");
@@ -4556,6 +4486,7 @@ function AppInner() {
     setDetailReturn(screen);
     setOpenId(id);
     setScreen("detail");
+    trackPropertyOpen();
   };
   const handleTab = (tab) => {
     setMenuOpen(false);
@@ -4599,12 +4530,29 @@ function AppInner() {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [screen, openId, route.type]);
 
+  // ── Active nav key ──────────────────────────────────────────────────────
+  // Centralised so every TopNav / MobileBottomNav placement stays in sync.
+  // Detail pages and home count as "browse" (you got there via Research).
+  // Settings, budget, legal etc. don't map to any visible tab — return null
+  // so no tab pretends to be selected.
+  const navKey = useMemo(() => {
+    if (route.type === "leaderboard") return "leaderboard";
+    if (route.type === "methodology") return null;
+    if (route.type === "report-new") return null;
+    if (screen === "browse" || screen === "detail" || screen === "home") return "browse";
+    if (screen === "map") return "map";
+    if (screen === "saved") return "saved";
+    if (screen === "goals") return "goals";
+    return null;
+  }, [route.type, screen]);
+
   if (route.type === "methodology") {
     return (
       <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
-        <TopNav active="browse" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <TopNav active={navKey} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} onMatchMe={() => setShowMatchMe(true)} wishlistCount={wishlist.size} />
+        <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
         <MethodologyScreen onBack={exitPublicRoute} />
-        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+        <MobileBottomNav active={navKey} onTab={handleTab} wishlistCount={wishlist.size} />
       </div>
     );
   }
@@ -4612,7 +4560,7 @@ function AppInner() {
   if (route.type === "leaderboard") {
     return (
       <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
-        <TopNav active="leaderboard" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <TopNav active={navKey} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} onMatchMe={() => setShowMatchMe(true)} wishlistCount={wishlist.size} />
         <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
         <LeaderboardScreen
           properties={properties}
@@ -4627,7 +4575,7 @@ function AppInner() {
             onMethodology={() => { navigateTo({ type: "methodology" }); setRoute(parseRoute()); }}
           />
         </div>
-        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+        <MobileBottomNav active={navKey} onTab={handleTab} wishlistCount={wishlist.size} />
       </div>
     );
   }
@@ -4635,13 +4583,14 @@ function AppInner() {
   if (route.type === "report-new") {
     return (
       <div style={{ minHeight: "100vh", background: "#05070A", color: "#F5F7FA", paddingTop: 56 }}>
-        <TopNav active="browse" onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <TopNav active={navKey} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} onMatchMe={() => setShowMatchMe(true)} wishlistCount={wishlist.size} />
+        <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
         <VendorReportForm
           onBack={() => { exitPublicRoute(); setScreen("agent-preview"); }}
           onSaved={(prop) => setProperties(prev => [...prev, prop])}
           engine={SCORING_ENGINE}
         />
-        <MobileBottomNav active="browse" onTab={handleTab} wishlistCount={wishlist.size} />
+        <MobileBottomNav active={navKey} onTab={handleTab} wishlistCount={wishlist.size} />
       </div>
     );
   }
@@ -4663,7 +4612,7 @@ function AppInner() {
 
       {/* TOP NAV — hidden on buyer-facing agent share pages */}
       {!isAgentShareView && (
-        <TopNav active={screen} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} wishlistCount={wishlist.size} />
+        <TopNav active={navKey} onTab={handleTab} onMenuToggle={() => setMenuOpen(true)} onMatchMe={() => setShowMatchMe(true)} wishlistCount={wishlist.size} />
       )}
       {!isAgentShareView && (
         <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} onTab={handleTab} wishlistCount={wishlist.size} />
@@ -4671,7 +4620,7 @@ function AppInner() {
 
       {/* MOBILE BOTTOM NAV */}
       {!isAgentShareView && (
-        <MobileBottomNav active={screen} onTab={handleTab} wishlistCount={wishlist.size} />
+        <MobileBottomNav active={navKey} onTab={handleTab} wishlistCount={wishlist.size} />
       )}
 
       {/* Page content — centered single-column matching the app width.
@@ -4703,6 +4652,16 @@ function AppInner() {
               <Suspense key="budget" fallback={<div style={{ minHeight: "60vh" }} />}>
                 <BudgetScreen onBrowse={() => handleTab("browse")} />
               </Suspense>
+            )}
+            {screen === "goals" && (
+              <GoalsScreen
+                key="goals"
+                properties={properties}
+                goals={goals}
+                onChangeGoals={setGoals}
+                onOpen={handleOpen}
+                onTab={handleTab}
+              />
             )}
             {screen === "agent-preview" && (
               <AgentPreviewScreen
@@ -4930,7 +4889,7 @@ function AppInner() {
         .h1-break-desktop { display: inline; }
         .eyebrow-text-mobile { display: none !important; }
         .eyebrow-text-desktop { display: inline; }
-        .top-nav-mobile-budget { display: none !important; }
+        .top-nav-mobile-match { display: none !important; }
         .top-nav-mobile-menu { display: none !important; }
 
         /* ─── TABLET — 720-980px ─── */
@@ -4938,8 +4897,8 @@ function AppInner() {
           .hero-h1 { font-size: 56px !important; }
           .screen-h1 { font-size: 44px !important; }
           .detail-h1 { font-size: 36px !important; }
-          .top-nav-budget span { display: none !important; }
-          .top-nav-budget { padding: 11px 13px !important; }
+          .top-nav-match span:not(.top-nav-mobile-match-label) { display: none !important; }
+          .top-nav-match { padding: 11px 13px !important; }
           .bgt-h { font-size: 40px !important; }
         }
 
@@ -4970,6 +4929,12 @@ function AppInner() {
           .studio-bricks { grid-template-columns: 1fr !important; }
           .cta-grid { grid-template-columns: 1fr !important; gap: 20px !important; }
           .detail-gallery { grid-template-columns: 1fr !important; }
+          .verdict-tiles { grid-template-columns: repeat(2, 1fr) !important; }
+          .verdict-card { margin-left: -8px !important; margin-right: -8px !important; }
+          .verdict-card > div { padding: 22px 20px 20px !important; }
+          .sensitivity-grid { grid-template-columns: 1fr !important; }
+          .returns-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .comparison-rail-grid { grid-template-columns: 1fr !important; }
           .home-cta-band { grid-template-columns: 1fr !important; }
           .footer-grid { grid-template-columns: 1fr 1fr !important; gap: 24px !important; }
           .footer-bottom { flex-direction: column !important; align-items: flex-start !important; }
@@ -5001,7 +4966,7 @@ function AppInner() {
           .top-nav-spacer {
             display: none !important;
           }
-          .top-nav-mobile-budget,
+          .top-nav-mobile-match,
           .top-nav-mobile-menu {
             display: inline-flex !important;
           }
@@ -5016,7 +4981,7 @@ function AppInner() {
             max-width: 108px !important;
             object-fit: contain !important;
           }
-          .top-nav-mobile-budget {
+          .top-nav-mobile-match {
             margin-left: auto !important;
           }
           .mobile-menu-panel {
@@ -5488,6 +5453,19 @@ function AppInner() {
           .hero-header p { font-size: 15.5px !important; }
         }
       `}</style>
+
+      {/* Top-down "match me" — 60-second questionnaire → ranked properties */}
+      <MatchMe
+        open={showMatchMe}
+        onClose={() => setShowMatchMe(false)}
+        properties={properties}
+        onOpenProperty={(id) => { setShowMatchMe(false); handleOpen(id); }}
+      />
+
+      {/* Concierge nudge — appears after 3 property opens */}
+      <ConciergeNudge
+        onRequest={() => openReferral({ kind: "agent" })}
+      />
     </div>
   );
 }
@@ -5608,6 +5586,14 @@ function ScreenH1({ children, accent, fontSize = 64 }) {
 
 function MobileBottomNav({ active, onTab, wishlistCount = 0 }) {
   return (
+    <>
+    {/* Self-contained — same reasoning as TopNav: AppInner's global <style>
+        block isn't mounted on early-return routes (methodology/leaderboard). */}
+    <style>{`
+      @media (max-width: 720px) {
+        .mobile-bottom-nav { display: flex !important; }
+      }
+    `}</style>
     <div className="mobile-bottom-nav" style={{
       position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 50,
       display: "none",
@@ -5630,6 +5616,7 @@ function MobileBottomNav({ active, onTab, wishlistCount = 0 }) {
         <MobileNavTab active={active === "map"} onClick={() => onTab("map")} Icon={MapIcon} label="Map" />
       </div>
     </div>
+    </>
   );
 }
 
@@ -5674,6 +5661,7 @@ function MobileNavTab({ active, onClick, Icon, label, badge }) {
 function MobileMenu({ open, onClose, onTab, wishlistCount = 0 }) {
   const items = [
     { id: "browse", label: "Research properties", sub: "Ranked listings with 30-year cashflow", Icon: Search },
+    { id: "goals", label: "Your goals", sub: "Watch life milestones land on the 30-year map", Icon: Target },
     { id: "leaderboard", label: "Agency leaderboard", sub: "Suburb rankings · screenshot & share", Icon: Trophy },
     { id: "map", label: "Property map", sub: "Suburb scores · tap markers to compare", Icon: MapIcon },
     { id: "saved", label: "Your shortlist", sub: wishlistCount > 0 ? `${wishlistCount} saved for later` : "Bookmark properties to compare", Icon: Bookmark, badge: wishlistCount },
@@ -5772,8 +5760,39 @@ function MobileMenu({ open, onClose, onTab, wishlistCount = 0 }) {
   );
 }
 
-function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
+function TopNav({ active, onTab, onMenuToggle, onMatchMe, wishlistCount = 0 }) {
   return (
+    <>
+    {/* Self-contained responsive rules. We can't rely on the global <style>
+        block in AppInner because TopNav also renders on early-return routes
+        (methodology, leaderboard, report-new) where that block isn't mounted. */}
+    <style>{`
+      .top-nav-mobile-match,
+      .top-nav-mobile-menu { display: none !important; }
+      @media (max-width: 980px) {
+        .top-nav-match span:not(.top-nav-mobile-match-label) { display: none !important; }
+        .top-nav-match { padding: 11px 13px !important; }
+      }
+      @media (max-width: 720px) {
+        .top-nav-shell { top: 0 !important; padding: 0 !important; }
+        .top-nav {
+          height: 56px !important; max-width: 100% !important; width: 100% !important;
+          border-radius: 0 !important; padding: 0 10px 0 12px !important; gap: 8px !important;
+          background: rgba(10,12,16,0.94) !important;
+          border: none !important;
+          border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+        }
+        .top-nav-tabs, .top-nav-spacer { display: none !important; }
+        .top-nav-mobile-match,
+        .top-nav-mobile-menu { display: inline-flex !important; }
+        .top-nav-match { display: none !important; }
+        .top-nav-brand { flex: 1 !important; min-width: 0 !important;
+          justify-content: flex-start !important; margin-right: 6px !important; }
+        .top-nav-logo { height: 22px !important; max-width: 108px !important;
+          object-fit: contain !important; }
+        .top-nav-mobile-match { margin-left: auto !important; }
+      }
+    `}</style>
     <div className="top-nav-shell" style={{
       position: "fixed", top: 18, left: 0, right: 0, zIndex: 50,
       display: "flex", justifyContent: "center",
@@ -5808,14 +5827,15 @@ function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
           <TopTab active={active === "browse"} onClick={() => onTab("browse")} Icon={Search} label="Research" />
           <TopTab active={active === "map"} onClick={() => onTab("map")} Icon={MapIcon} label="Map" />
           <TopTab active={active === "leaderboard"} onClick={() => onTab("leaderboard")} Icon={Trophy} label="Leaderboard" />
+          <TopTab active={active === "goals"} onClick={() => onTab("goals")} Icon={Target} label="Goals" />
           <TopTab active={active === "saved"} onClick={() => onTab("saved")} Icon={Bookmark} label="Shortlist" badge={wishlistCount} />
         </div>
 
-        {/* DESKTOP: right side — budget learn-more pill + settings gear */}
+        {/* DESKTOP: right side — Match Me primary CTA */}
         <div className="top-nav-spacer" style={{ flex: 1, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
           <button
-            onClick={() => onTab("budget")}
-            className="top-nav-budget"
+            onClick={() => onMatchMe?.()}
+            className="top-nav-match"
             style={{
               cursor: "pointer",
               background: "linear-gradient(135deg, rgba(244,63,94,0.14) 0%, rgba(244,63,94,0.05) 100%)",
@@ -5828,16 +5848,21 @@ function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
               display: "inline-flex", alignItems: "center", gap: 8,
               whiteSpace: "nowrap",
             }}>
-            <FileText size={14} strokeWidth={2} color="#FB7185" />
-            <span>2026 tax & property rules</span>
-            <ArrowRight size={13} strokeWidth={2.2} color="rgba(254,205,211,0.7)" />
+            <Sparkles size={14} strokeWidth={2} color="#FB7185" fill="#FB7185" />
+            <span>Match me to a property</span>
+            <span style={{
+              fontSize: 10, fontWeight: 600, padding: "2px 6px",
+              borderRadius: 999, background: "rgba(244,63,94,0.18)",
+              color: "rgba(254,205,211,0.8)",
+              letterSpacing: 0.04,
+            }}>60s</span>
           </button>
         </div>
 
-        {/* MOBILE-ONLY: budget learn-more pill */}
+        {/* MOBILE-ONLY: Match Me mini pill — same subtle treatment */}
         <button
-          onClick={() => onTab("budget")}
-          className="top-nav-mobile-budget"
+          onClick={() => onMatchMe?.()}
+          className="top-nav-mobile-match"
           style={{
             cursor: "pointer",
             background: "linear-gradient(135deg, rgba(244,63,94,0.14) 0%, rgba(244,63,94,0.05) 100%)",
@@ -5849,14 +5874,11 @@ function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
             fontSize: 11, fontWeight: 600, letterSpacing: -0.03,
             alignItems: "center", gap: 5,
             whiteSpace: "nowrap",
-            flexShrink: 1,
-            minWidth: 0,
-            maxWidth: "42vw",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            flexShrink: 1, minWidth: 0,
+            maxWidth: "44vw",
           }}>
-          <FileText size={12} strokeWidth={2} color="#FB7185" style={{ flexShrink: 0 }} />
-          <span className="top-nav-mobile-budget-label">2026 rules</span>
+          <Sparkles size={12} strokeWidth={2} color="#FB7185" fill="#FB7185" style={{ flexShrink: 0 }} />
+          <span className="top-nav-mobile-match-label">Match me</span>
         </button>
 
         {/* MOBILE-ONLY: Menu icon — larger */}
@@ -5878,6 +5900,7 @@ function TopNav({ active, onTab, onMenuToggle, wishlistCount = 0 }) {
         </button>
       </div>
     </div>
+    </>
   );
 }
 
@@ -6399,7 +6422,7 @@ function NegativeGearingExplainer({ sampleProperty }) {
       </div>
 
       <div style={{ color: "#5C6477", fontSize: 10, textAlign: "center", marginTop: 4, fontStyle: "italic" }}>
-        Same $750k property, 30-year P&I mortgage — two budget outcomes.
+        Same $750k property, 30-year interest-only loan — two budget outcomes.
       </div>
     </motion.div>
   );
@@ -7036,6 +7059,7 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         }}>
           Australia's biggest property tax shake-up in a generation just landed. The Bricks shows you the 30-year truth before you commit.
         </p>
+
       </div>
 
       {/* Tax bracket row — bracket panel + Filters, centered together */}
@@ -7425,7 +7449,10 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
         </div>
       )}
 
-      {/* Home-page referral CTAs removed — agent-first product */}
+      {/* 2026 budget cliff — countdown band sits below the listings so the
+          first thing buyers see is properties, but they can't miss the cliff. */}
+      <BudgetCTABand onOpenBudget={onOpenBudget} marginTop={64} marginBottom={32} />
+
       </div>
 
       {/* Floating Map toggle — sticks to viewport bottom-right, hidden on mobile */}

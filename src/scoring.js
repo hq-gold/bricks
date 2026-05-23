@@ -26,7 +26,11 @@ export function computeBricksScore(property, suburbStats, engine) {
   const cf = engine.generateCashflow(property);
   const positiveYear = engine.yearTurnsPositive(cf) || 30;
   const c = property.confidence || {};
-  const deposit = property.price * 0.2;
+  // Honour the user-chosen deposit if it's been set on the property override,
+  // otherwise fall back to the engine default (20%). This means dragging the
+  // Scenario Studio deposit slider actually moves the Bricks Score.
+  const depositPct = (property.deposit != null ? property.deposit : 0.20);
+  const deposit = property.price * depositPct;
   const totalCf = cf.reduce((s, x) => s + x, 0);
   const cfMultiple = deposit > 0 ? totalCf / deposit : 0;
 
