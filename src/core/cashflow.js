@@ -27,7 +27,46 @@ export const MODEL_DEFAULTS = Object.freeze({
   buildingPestEstablished: 500,
   sellingCostsPct: 0.03,
   cgtDiscount: 0.50,
+  // 2026 budget assumes long-run CPI ~3% p.a. for cost-base indexation. Used
+  // ONLY for the new CGT method (post 1 July 2027 gains on established stock).
+  cpiAssumption: 0.030,
+  cgtMinTaxRate: 0.30,
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// 2026 BUDGET POLICY DATES
+// Anchor everything (NG grandfathering, CGT cliff) to these so a single
+// constant change can shift the model.
+// ════════════════════════════════════════════════════════════════════════════
+export const BUDGET_2026 = Object.freeze({
+  // 7:30pm AEST 12 May 2026 — properties exchanged before this kept full NG forever.
+  ngCutoffDate: new Date("2026-05-12T19:30:00+10:00"),
+  // 1 July 2027 — new CGT regime begins, NG quarantine starts for established post-budget.
+  cgtCutoffDate: new Date("2027-07-01T00:00:00+10:00"),
+});
+
+/**
+ * Effective marginal-tax-rate brackets — Stage-3 cuts (1 July 2024) PLUS
+ * the 2% Medicare levy. These are the rates used when a property loss is
+ * refunded as a tax deduction (or a property gain is taxed as income).
+ *
+ *   Tax-free: 0 – $18,200
+ *   16% + 2% Medicare = 18%   (effective 18% on $18,200–$45,000)
+ *   30% + 2% Medicare = 32%   ($45,000–$135,000)
+ *   37% + 2% Medicare = 39%   ($135,000–$190,000)
+ *   45% + 2% Medicare = 47%   ($190,000+)
+ *
+ * Used everywhere a user picks "their tax bracket" so the same property
+ * shows the same after-tax cashflow on Browse, Detail, Goals, and MatchMe.
+ */
+export const TAX_BRACKETS = [
+  { id: "18", rate: 0.18, label: "18%", income: "Up to $45k" },
+  { id: "32", rate: 0.32, label: "32%", income: "$45k – $135k" },
+  { id: "39", rate: 0.39, label: "39%", income: "$135k – $190k" },
+  { id: "47", rate: 0.47, label: "47%", income: "$190k+" },
+];
+export const DEFAULT_BRACKET_ID = "39";
+export const DEFAULT_MARGINAL_RATE = 0.39;
 
 // Land tax — annual, by state, on (estimated) unimproved land value (FY2025-26).
 export function landTaxAnnual({ state, landValue }) {
@@ -237,12 +276,15 @@ export function piMonthlyRepayment(loan, annualRate, years) {
  * For richer outputs (acquisition cash, equity, CGT-on-exit, carried-forward losses)
  * use generateScenario() — which calls this internally then layers metadata on top.
  *
- * 2026 budget treatment:
- *   - New builds: full negative gearing (losses × marginalRate refunded each year).
- *   - Established builds: losses are QUARANTINED — they can't offset other income but
- *     accumulate and reduce future positive rental income (and eventually CGT on sale).
- *     We track the carry-forward bucket internally and apply it the moment the
- *     property turns positive. This is materially more accurate than the old hard-zero.
+ * 2026 BUDGET TREATMENT (now phased correctly):
+ *   - NEW BUILDS: full negative gearing forever — losses × marginalRate refunded each year.
+ *   - ESTABLISHED, GRANDFATHERED (purchasedPreBudget = true, i.e. exchanged before
+ *     7:30pm AEST 12 May 2026): full negative gearing forever, same as new builds.
+ *   - ESTABLISHED, POST-BUDGET (the default for any property on Bricks today —
+ *     you'd be buying it now, post-12-May-2026): full NG continues until 30 June 2027,
+ *     then losses are QUARANTINED from 1 July 2027 — they can only offset other
+ *     residential property income (or CGT on disposal). We track the carry-forward
+ *     bucket and release it against future positive rental income or the sale gain.
  */
 export function generateCashflow(input) {
   return generateScenario(input).monthly;
@@ -257,7 +299,7 @@ export function generateScenario(input) {
     price, yieldPct, growthPct = 5,
     rate = MODEL_DEFAULTS.rate,
     deposit = MODEL_DEFAULTS.deposit,
-    marginalRate = 0.39,
+    marginalRate = DEFAULT_MARGINAL_RATE,
     build = "new",
     state = "NSW",
     months = 360,
@@ -273,6 +315,14 @@ export function generateScenario(input) {
     // CGT can still be exempt on sale — we surface this as a UI note rather than
     // automatically apply it (the user's circumstances vary).
     pporYears = 0,
+    // 2026 BUDGET HOOKS — defaults assume the user is buying NOW, post-budget.
+    // Set purchasedPreBudget = true for the user's existing portfolio (it's
+    // grandfathered and keeps full NG + 50% CGT forever).
+    purchasedPreBudget = false,
+    // Years from "today" (2026) until the user buys. Used to know whether the
+    // 1 July 2027 NG cliff falls inside the 30-year holding window.
+    yearsUntilPurchase = 0,
+    cpiAssumption = MODEL_DEFAULTS.cpiAssumption,
   } = input;
   const property = { type, state, price, build };
 
@@ -303,11 +353,22 @@ export function generateScenario(input) {
   const piRepaymentM = piMonthlyRepayment(loan, rate, MODEL_DEFAULTS.loanTermYears);
   let loanBalance = loan;
 
-  // 2026 budget: NG losses on new builds are refundable each year.
-  // For established builds, losses are quarantined and carried forward — they
-  // reduce future positive rental income (and eventually CGT) but DO NOT produce
-  // a cash refund in the year they're incurred.
-  const ngRefundable = build === "new";
+  // 2026 BUDGET — NG eligibility, properly phased.
+  //   New build: full NG, refundable forever.
+  //   Established + grandfathered (bought before 12 May 2026): full NG forever.
+  //   Established + post-budget purchase: NG refundable until the cliff
+  //     (1 July 2027), then quarantined to property/CGT income only.
+  //
+  // Calculation: the user buys at month 0; if they're buying TODAY (yearsUntilPurchase=0)
+  // and the cliff is ~14 months away, the first 14 months get full NG, after which
+  // losses go into the carry-forward bucket.
+  const ngAlwaysRefundable = build === "new" || purchasedPreBudget;
+  // Months from purchase until the NG cliff (1 July 2027). Established post-
+  // budget purchasers get full NG until then; new-builds and grandfathered
+  // purchasers never hit the cliff.
+  const monthsUntilCliff = ngAlwaysRefundable
+    ? Infinity
+    : Math.max(0, Math.round((14 - yearsUntilPurchase * 12)));
 
   const arr = [];
   const monthlyDetail = [];
@@ -363,8 +424,12 @@ export function generateScenario(input) {
 
     if (!isPporPhase) {
       const taxableIncomeM = rentMonthly - interestM - totalCashCostsM - totalDepreciationM;
+      // NG is refundable for new builds and grandfathered established purchases
+      // forever; for post-budget established purchases it's refundable only up
+      // to the 1 July 2027 cliff, then losses are quarantined.
+      const ngRefundableThisMonth = ngAlwaysRefundable || m < monthsUntilCliff;
       if (taxableIncomeM < 0) {
-        if (ngRefundable) {
+        if (ngRefundableThisMonth) {
           taxBenefitM = (-taxableIncomeM) * marginalRate;
         } else {
           carryForwardLoss += -taxableIncomeM;
@@ -421,11 +486,64 @@ export function generateScenario(input) {
   const gainAfterCarried = Math.max(0, grossGain - carryForwardLoss);
   const carriedUsedOnSale = Math.min(carryForwardLoss, grossGain);
 
-  // 50% CGT discount for individuals holding >12 months. Note: the 2026 budget
-  // floated a reduction to 40% for established properties — we keep 50% as the
-  // default and surface the alternate scenario in the UI rather than baking it in.
-  const taxableGain = gainAfterCarried * MODEL_DEFAULTS.cgtDiscount;
-  const cgtTax = taxableGain * marginalRate;
+  // ────────────────────────────────────────────────────────────────────────
+  // 2026 BUDGET — DUAL-PERIOD CGT
+  //
+  // Pre-1 July 2027 portion of the gain → old 50% discount (always available).
+  // Post-1 July 2027 portion → indexation method + 30% minimum tax (NEW REGIME),
+  //   UNLESS the asset is grandfathered (purchased before 12 May 2026) — those
+  //   investors keep the 50% discount forever on the entire gain.
+  //
+  // Investors in NEW BUILDS get the legislated CHOICE between methods on the
+  // post-2027 portion — we automatically pick whichever yields the lower tax.
+  // ────────────────────────────────────────────────────────────────────────
+
+  // What fraction of the holding period falls before vs after the cliff?
+  // yearsUntilPurchase=0 means buy today; cliff is ~1 year out.
+  const yearsToCliff = Math.max(0, 1 - yearsUntilPurchase);
+  const postCliffYears = Math.max(0, exitYrFraction - yearsToCliff);
+  const postCliffFrac = exitYrFraction > 0
+    ? Math.min(1, postCliffYears / exitYrFraction)
+    : 0;
+
+  // Split the net taxable gain into pre/post cliff portions.
+  const preCliffGain = gainAfterCarried * (1 - postCliffFrac);
+  const postCliffGain = gainAfterCarried * postCliffFrac;
+
+  // OLD METHOD — 50% discount × marginal rate.
+  const taxOldOnPre = preCliffGain * MODEL_DEFAULTS.cgtDiscount * marginalRate;
+  const taxOldOnPost = postCliffGain * MODEL_DEFAULTS.cgtDiscount * marginalRate;
+
+  // NEW METHOD — CPI indexation + 30% minimum tax floor.
+  // We index the relevant cost-base PORTION over the post-cliff years, so the
+  // taxable real gain is gain − (cost-base × ((1+CPI)^postYears − 1)) scaled to
+  // the post-cliff slice. Min-30% floor compares against the marginal-rate calc.
+  const costBasePostShare = adjustedCostBase * postCliffFrac;
+  const indexationUplift = postCliffYears > 0
+    ? costBasePostShare * (Math.pow(1 + cpiAssumption, postCliffYears) - 1)
+    : 0;
+  const realPostGain = Math.max(0, postCliffGain - indexationUplift);
+  const taxNewOnPostMarginal = realPostGain * marginalRate;
+  const taxNewOnPostMinFloor = realPostGain * MODEL_DEFAULTS.cgtMinTaxRate;
+  const taxNewOnPost = Math.max(taxNewOnPostMarginal, taxNewOnPostMinFloor);
+
+  // Which method applies post-cliff?
+  //   • Grandfathered (bought before 12 May 2026) → OLD method on whole gain.
+  //   • New build → INVESTOR CHOICE → take the cheaper of old/new on post-cliff.
+  //   • Established post-budget → NEW method (no choice).
+  let cgtTax;
+  let cgtRegime;
+  if (purchasedPreBudget) {
+    cgtTax = taxOldOnPre + taxOldOnPost;
+    cgtRegime = "grandfathered-50pct";
+  } else if (build === "new") {
+    const postTax = Math.min(taxOldOnPost, taxNewOnPost);
+    cgtTax = taxOldOnPre + postTax;
+    cgtRegime = postTax === taxNewOnPost ? "new-build-chose-indexation" : "new-build-chose-50pct";
+  } else {
+    cgtTax = taxOldOnPre + taxNewOnPost;
+    cgtRegime = "established-indexation";
+  }
 
   const loanBalanceAtExit = loanType === "pi" ? loanBalance : (price * (1 - deposit));
   const netProceeds = salePrice - sellingCosts - cgtTax - loanBalanceAtExit;
@@ -444,13 +562,23 @@ export function generateScenario(input) {
       grossGain: Math.round(grossGain),
       carryForwardLoss: Math.round(carryForwardLoss),
       carriedUsedOnSale: Math.round(carriedUsedOnSale),
-      taxableGain: Math.round(taxableGain),
       cgtTax: Math.round(cgtTax),
+      cgtRegime,
+      preCliffGain: Math.round(preCliffGain),
+      postCliffGain: Math.round(postCliffGain),
+      indexationUplift: Math.round(indexationUplift),
       loanBalanceAtExit: Math.round(loanBalanceAtExit),
       equityAtExit: Math.round(equityAtExit),
       netProceeds: Math.round(netProceeds),
     },
-    inputs: { price, yieldPct, growthPct, rate, deposit, marginalRate, build, state, loanType },
+    inputs: {
+      price, yieldPct, growthPct, rate, deposit, marginalRate, build, state, loanType,
+      purchasedPreBudget, yearsUntilPurchase,
+    },
+    policy: {
+      ngAlwaysRefundable,
+      monthsUntilCliff: Number.isFinite(monthsUntilCliff) ? monthsUntilCliff : null,
+    },
   };
 }
 
@@ -595,15 +723,20 @@ export function computeReturns(scenario, horizonYears = 30) {
   const seriesCashflowOnly = [-acqTotal, ...window];
   const irrCashflowOnly = irrMonthly(seriesCashflowOnly, 0);
 
-  // IRR all-in — adds exit equity (after CGT, after selling costs, less remaining loan)
-  // The scenario.exit object reports netProceeds (sale - costs - cgt - remaining loan)
-  // We add the deposit BACK to that because we already counted it as a year-0 outflow.
-  const exitProceeds = (scenario.exit?.netProceeds || 0)
-    + (scenario.acquisition?.deposit || 0);
+  // IRR all-in — adds exit net proceeds (sale − costs − CGT − remaining loan).
+  // We do NOT add the deposit back: the deposit was a real cash outflow at
+  // year zero so it stays as the negative leg of the IRR series. Net proceeds
+  // is what the bank deposits in your account on settlement.
+  const exitProceeds = scenario.exit?.netProceeds || 0;
   const irrAllIn = irrMonthly(seriesCashflowOnly, exitProceeds);
 
+  // Money multiple — every dollar that came back to the investor (positive
+  // monthly cashflow + net sale proceeds AFTER CGT, costs and remaining loan)
+  // divided by every dollar they put in (acquisition + any monthly bleed).
+  // Note: we previously used equityAtExit (gross of CGT) which double-counted —
+  // netProceeds already nets out CGT, selling costs and the loan payoff.
   const moneyMultiple = totalCashIn > 0
-    ? (totalPositive + (scenario.exit?.equityAtExit || 0)) / totalCashIn
+    ? (totalPositive + Math.max(0, scenario.exit?.netProceeds || 0)) / totalCashIn
     : 0;
 
   return {

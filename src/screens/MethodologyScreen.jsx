@@ -140,8 +140,9 @@ const SECTIONS = [
     tag: "Cashflow engine",
     title: "The 30-year after-tax model",
     body: [
-      "360-month series. Conservative defaults: 6.6% interest, 80% LVR, interest-only by default, 2 weeks vacancy a year, holding costs by property type, Division 43 and Division 40 depreciation per ATO rules, state-by-state land tax.",
-      "Post-2027 negative gearing rules are encoded: established properties bought after 12 May 2026 have rental losses quarantined; new builds retain full NG. CGT discount changes for assets sold after 1 July 2027 are not yet in the model.",
+      "360-month series. Conservative defaults: 6.39% interest, 80% LVR, interest-only by default, 2 weeks vacancy a year, holding costs by property type, Division 43 and Division 40 depreciation per ATO rules, state-by-state land tax.",
+      "Post-2027 negative gearing rules are encoded: established properties bought after 7:30pm AEST 12 May 2026 keep full NG until 30 June 2027, then losses are quarantined to other property income; new builds and grandfathered (pre-budget) holdings retain full NG forever.",
+      "CGT reforms are also modelled: gains arising before 1 July 2027 keep the 50% discount; post-1 July 2027 gains use CPI cost-base indexation with a 30% minimum tax. New-build investors automatically get the better-of-two-methods treatment on the post-2027 portion. Grandfathered holdings keep the 50% discount on the entire gain.",
     ],
   },
   {

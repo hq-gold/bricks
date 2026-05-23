@@ -425,7 +425,12 @@ function buildWealthVars(property, marginalRate) {
   };
 }
 
-export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, onTab }) {
+export default function GoalsScreen({
+  properties, goals, onChangeGoals, onOpen, onTab,
+  // Bracket is hoisted to AppInner so it stays consistent with Browse + Settings.
+  // We mirror it locally for instant feedback and bubble changes back up.
+  initialBracket = 39, onBracketChange,
+}) {
   // Default to whichever property has the earliest break-even — the one most likely
   // to make the goal-marker viz feel like magic.
   const defaultPropertyId = useMemo(() => {
@@ -439,7 +444,18 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
   }, [properties]);
   const [selectedId, setSelectedId] = useState(defaultPropertyId);
   const [horizonYears, setHorizonYears] = useState(30);
-  const [marginalRate, setMarginalRate] = useState(39);
+  const [marginalRate, setMarginalRate] = useState(initialBracket);
+  // Sync upward whenever the user picks a new bracket on this screen so the
+  // choice persists when they navigate to Browse/Settings/Detail.
+  useEffect(() => { onBracketChange?.(marginalRate); }, [marginalRate, onBracketChange]);
+  // Resync the picker when the property list changes (filter/refresh/search).
+  // Without this the screen could be locked on a stale or null selection.
+  useEffect(() => {
+    if (!properties?.length) return;
+    if (!properties.find(p => p.id === selectedId)) {
+      setSelectedId(defaultPropertyId);
+    }
+  }, [properties, defaultPropertyId, selectedId]);
   const selectedProperty = properties.find(p => p.id === selectedId) || properties[0];
 
   // Persist any goals change immediately
@@ -627,7 +643,9 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
           </div>
 
           {/* Horizon switch + tax bracket — shape the brick honestly to YOUR
-              numbers. Tax bracket flips negative gearing on/off in real time. */}
+              numbers. Tax bracket SCALES negative-gearing refunds (a higher
+              bracket = bigger refund per dollar of loss). NG eligibility itself
+              is set by the property's build status under 2026 budget rules. */}
           <div className="goals-horizon-row" style={{
             display: "flex", flexWrap: "wrap", alignItems: "center",
             gap: 18, marginBottom: 22,
@@ -676,10 +694,11 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
                 border: "1px solid rgba(255,255,255,0.08)",
                 borderRadius: 999,
               }}>
-                {[16, 30, 37, 45].map(b => {
+                {[18, 32, 39, 47].map(b => {
                   const on = marginalRate === b;
                   return (
                     <button key={b} onClick={() => setMarginalRate(b)}
+                      title={`${b}% effective (incl. 2% Medicare levy)`}
                       style={{
                         cursor: "pointer", border: "none",
                         borderRadius: 999, padding: "7px 12px",

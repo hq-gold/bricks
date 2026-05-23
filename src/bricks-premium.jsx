@@ -1683,7 +1683,7 @@ function BottomNav({ active, onTab, onAdd, wishlistCount = 0 }) {
   );
 }
 
-function HomeScreen({ properties, goals, onOpen }) {
+function HomeScreen({ properties, goals, onOpen, onTab }) {
   const owned = properties.filter(p => p.status === "owned");
   const considering = properties.filter(p => p.status === "considering");
   return (
@@ -1699,7 +1699,10 @@ function HomeScreen({ properties, goals, onOpen }) {
             Your portfolio
           </div>
         </div>
-        <motion.button whileTap={{ scale: 0.92 }} style={iconBtn}><Settings size={17} /></motion.button>
+        <motion.button whileTap={{ scale: 0.92 }} onClick={() => onTab && onTab("settings")}
+          aria-label="Open settings" style={iconBtn}>
+          <Settings size={17} />
+        </motion.button>
       </div>
       {owned.length > 0 && (
         <>
@@ -1754,12 +1757,46 @@ function ConfidenceCard({ Icon, label, data, max = 100, higherBetter = true, del
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
         {data.reasons.map((r, i) => (
           <div key={i} style={{ color: "#C5CAD6", fontSize: 11.5, display: "flex", gap: 6, alignItems: "flex-start" }}>
-            <span style={{ color: bandColor, marginTop: 1, flexShrink: 0 }}>•</span><span>{r}</span>
+            <span style={{ color: bandColor, marginTop: 1, flexShrink: 0 }}>•</span>
+            <span>{decorateJargon(r)}</span>
           </div>
         ))}
       </div>
     </motion.div>
   );
+}
+
+// Wrap investor jargon with hover-tooltips so non-experts see plain English.
+// Plays nice with screen readers via <abbr title> semantics.
+const JARGON_GLOSSARY = {
+  DOM: "Days on market — how long a typical listing sits before selling. Lower = faster liquidity.",
+  LVR: "Loan-to-value ratio — your loan as a % of the property's value. Above 80% triggers LMI.",
+  LMI: "Lenders' Mortgage Insurance — a one-off premium when LVR > 80%.",
+  IRR: "Internal rate of return — the annualised return on every dollar in and out, including the sale.",
+  MTR: "Marginal tax rate — the % the ATO takes on your next dollar of taxable income.",
+  NG:  "Negative gearing — claiming a property loss against your other income. Restricted to new builds for purchases after 12 May 2026, from 1 July 2027.",
+  PI:  "Principal & interest — repayments include both interest and loan payoff each month.",
+  IO:  "Interest-only — you only pay interest; the loan balance stays the same.",
+  CGT: "Capital gains tax — tax on the profit when you sell. Pre-1 July 2027 gains keep the 50% discount; post-2027 gains use indexation + 30% min tax.",
+  PPOR:"Principal place of residence — your home; CGT-exempt if you live in it.",
+  ATO: "Australian Taxation Office.",
+};
+function decorateJargon(text) {
+  if (typeof text !== "string") return text;
+  // Match whole-word acronyms only (\bACRONYM\b). Returns an array of strings + <abbr> nodes.
+  const tokens = text.split(/(\b(?:DOM|LVR|LMI|IRR|MTR|NG|PI|IO|CGT|PPOR|ATO)\b)/g);
+  return tokens.map((tok, i) => {
+    const def = JARGON_GLOSSARY[tok];
+    if (def) {
+      return (
+        <abbr key={i} title={def} style={{
+          textDecoration: "underline dotted rgba(245,247,250,0.35)",
+          textUnderlineOffset: 2, cursor: "help",
+        }}>{tok}</abbr>
+      );
+    }
+    return tok;
+  });
 }
 
 function ToggleOption({ active, onClick, color, label, sub }) {
@@ -1795,14 +1832,24 @@ function DetailScreen({ property, goals, onBack, onOpen, onOpenBudget, wishliste
         wishlisted={wishlisted} onToggleWishlist={onToggleWishlist} />;
 }
 
-// Photo gallery — swipeable horizontal scroll, 4 images per property
+// Photo gallery — swipeable horizontal scroll, 4 images per property.
+// Active-dot tracking listens on the SCROLLER itself (the flex container),
+// not on each individual image — `onScroll` on a non-scrolling child never fires.
 function PhotoGallery({ property }) {
   const images = useMemo(() => getPropertyGallery(property), [property]);
   const [active, setActive] = useState(0);
+  const scrollerRef = useRef(null);
+
+  const handleScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    const w = el.clientWidth || 1;
+    const idx = Math.round(el.scrollLeft / w);
+    setActive(Math.max(0, Math.min(images.length - 1, idx)));
+  }, [images.length]);
 
   return (
     <div>
-      <div style={{
+      <div ref={scrollerRef} onScroll={handleScroll} style={{
         display: "flex", gap: 6,
         overflowX: "auto", overflowY: "hidden",
         marginLeft: -16, marginRight: -16,
@@ -1812,7 +1859,6 @@ function PhotoGallery({ property }) {
       }}>
         {images.map((src, i) => (
           <div key={i}
-            onScroll={() => setActive(i)}
             style={{
               flexShrink: 0,
               width: "92%", height: 220,
@@ -1827,7 +1873,6 @@ function PhotoGallery({ property }) {
           </div>
         ))}
       </div>
-      {/* Dot indicator */}
       <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 10 }}>
         {images.map((_, i) => (
           <div key={i} style={{
@@ -2809,7 +2854,9 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 Cashflow — what it costs you
               </div>
               <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", marginBottom: 20, lineHeight: 1.5 }}>
-                360 squares · <strong style={{ color: "rgba(245,247,250,0.75)" }}>after-tax at {vars.marginalRate}% bracket</strong> · {vars.build === "new" ? "negative gearing applied (new build)" : "no NG post-2027 (established)"}
+                360 squares · <strong style={{ color: "rgba(245,247,250,0.75)" }}>after-tax at {vars.marginalRate}% bracket</strong> · {vars.build === "new"
+                  ? "full negative gearing forever (new build)"
+                  : "full NG until 1 July 2027, then losses quarantined to property income (established, post-budget)"}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                 <CashflowGrid cashflow={cashflow} cell={11} gap={2.5}
@@ -4064,7 +4111,14 @@ function LegalScreen({ section = "terms" }) {
   );
 }
 
-function SettingsScreen({ onTab }) {
+function SettingsScreen({ onTab, bracket = "standard", onBracket }) {
+  const BRACKETS = [
+    { id: "low",      label: "18%", income: "Up to $45k" },
+    { id: "standard", label: "32%", income: "$45k – $135k" },
+    { id: "high",     label: "39%", income: "$135k – $190k" },
+    { id: "top",      label: "47%", income: "$190k+" },
+  ];
+  const current = BRACKETS.find(b => b.id === bracket) || BRACKETS[1];
   return (
     <motion.div key="settings" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 16 }}
       transition={{ duration: 0.22 }}
@@ -4106,6 +4160,53 @@ function SettingsScreen({ onTab }) {
           }}>
             Your bracket, your loan rate, your assumptions. Every projection on Bricks rebuilds itself from these.
           </p>
+        </div>
+
+        {/* Editable tax bracket — wired into the same state Browse + Goals use,
+            so changing it here immediately retunes after-tax cashflow everywhere.
+            Source of truth is AppInner; persisted to localStorage. */}
+        <div style={{
+          background: "rgba(255,255,255,0.03)",
+          boxShadow: "0 1px 0 rgba(255,255,255,0.05) inset, 0 0 0 1px rgba(255,255,255,0.07) inset",
+          borderRadius: 18, padding: "20px 22px", marginBottom: 24,
+        }}>
+          <div style={{
+            color: "rgba(245,247,250,0.55)", fontSize: 10.5, fontWeight: 700,
+            letterSpacing: 0.18, textTransform: "uppercase", marginBottom: 10,
+          }}>
+            Marginal tax rate (incl. 2% Medicare levy)
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {BRACKETS.map(b => {
+              const on = b.id === bracket;
+              return (
+                <button key={b.id} onClick={() => onBracket?.(b.id)}
+                  style={{
+                    cursor: "pointer", border: "none",
+                    borderRadius: 12, padding: "10px 14px",
+                    background: on
+                      ? "linear-gradient(135deg, rgba(251,113,133,0.20), rgba(251,113,133,0.08))"
+                      : "rgba(255,255,255,0.03)",
+                    boxShadow: on
+                      ? "0 0 0 1px rgba(251,113,133,0.45) inset"
+                      : "0 0 0 1px rgba(255,255,255,0.06) inset",
+                    color: on ? "#FECDD3" : "rgba(245,247,250,0.7)",
+                    fontSize: 13, fontWeight: 700,
+                    display: "inline-flex", flexDirection: "column", alignItems: "flex-start",
+                    minWidth: 110,
+                  }}>
+                  <span>{b.label}</span>
+                  <span style={{ fontSize: 10, fontWeight: 500, opacity: 0.7, marginTop: 2 }}>
+                    {b.income}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ color: "rgba(245,247,250,0.45)", fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+            Currently set to <strong style={{ color: "#FECDD3" }}>{current.label}</strong> ({current.income}).
+            Changes here apply to every after-tax cashflow brick, verdict, and Goals projection across the app.
+          </div>
         </div>
 
         {/* Pro upsell card — glass with rose accent */}
@@ -4155,17 +4256,20 @@ function SettingsScreen({ onTab }) {
           </button>
         </div>
 
-        {/* Settings list — glass card */}
+        {/* Settings list — glass card. These are the model defaults that
+            feed every cashflow and CGT projection on Bricks. (The tax bracket
+            above is the only one that's currently user-editable.) */}
         <div style={{
           background: "rgba(255,255,255,0.025)",
           boxShadow: "0 1px 0 rgba(255,255,255,0.04) inset, 0 0 0 1px rgba(255,255,255,0.06) inset, 0 30px 70px -38px rgba(0,0,0,0.88)",
           borderRadius: 20, padding: 4, marginBottom: 32,
         }}>
           {[
-            { l: "Your marginal tax rate", v: "39%" },
+            { l: "Marginal tax rate", v: `${current.label} (active)` },
             { l: "Region", v: "Australia" },
-            { l: "Loan rate assumption", v: "6.39%" },
+            { l: "Loan rate assumption", v: "6.39% IO" },
             { l: "Default deposit", v: "20%" },
+            { l: "CPI assumption (CGT indexation)", v: "3.0%" },
             { l: "Currency", v: "AUD" },
           ].map((r, i, arr) => (
             <div key={i} style={{
@@ -4463,7 +4567,18 @@ function AppInner() {
   const [goals, setGoals] = useState(() => loadStoredGoals() || []);
   const [showMatchMe, setShowMatchMe] = useState(false);
   const [wishlist, setWishlist] = useState(new Set());
-  const [bracket, setBracket] = useState("standard");
+  // Marginal tax bracket — persisted in localStorage so the user's pick
+  // travels across screens (Browse, Goals, Settings, Detail) and survives
+  // refreshes. "standard" maps to 32% (most $45–135k earners).
+  const [bracket, setBracket] = useState(() => {
+    try {
+      const v = localStorage.getItem("bricks-bracket");
+      return v && ["low", "standard", "high", "top"].includes(v) ? v : "standard";
+    } catch { return "standard"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("bricks-bracket", bracket); } catch { /* noop */ }
+  }, [bracket]);
   const [detailReturn, setDetailReturn] = useState("browse");
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -4643,7 +4758,7 @@ function AppInner() {
                                          onToggleWishlist={toggleWishlist}
                                          onOpen={handleOpen}
                                          onFindMore={() => handleTab("browse")} />}
-            {screen === "home"     && <HomeScreen key="home" properties={properties} goals={goals} onOpen={handleOpen} />}
+            {screen === "home"     && <HomeScreen key="home" properties={properties} goals={goals} onOpen={handleOpen} onTab={handleTab} />}
             {screen === "detail"   && openProperty && <DetailScreen key="detail" property={openProperty} goals={goals} onBack={handleDetailBack} onOpen={handleOpen} onOpenBudget={() => handleTab("budget")} wishlisted={wishlist.has(openProperty.id)} onToggleWishlist={toggleWishlist} />}
             {screen === "budget" && (
               <Suspense key="budget" fallback={<div style={{ minHeight: "60vh" }} />}>
@@ -4658,6 +4773,11 @@ function AppInner() {
                 onChangeGoals={setGoals}
                 onOpen={handleOpen}
                 onTab={handleTab}
+                initialBracket={({ low: 18, standard: 32, high: 39, top: 47 })[bracket] || 32}
+                onBracketChange={(rate) => {
+                  const id = ({ 18: "low", 32: "standard", 39: "high", 47: "top" })[rate];
+                  if (id) setBracket(id);
+                }}
               />
             )}
             {screen === "agent-preview" && (
@@ -4668,7 +4788,7 @@ function AppInner() {
                 onOpenProperty={handleOpen}
               />
             )}
-            {screen === "settings" && <SettingsScreen key="settings" onTab={handleTab} />}
+            {screen === "settings" && <SettingsScreen key="settings" onTab={handleTab} bracket={bracket} onBracket={setBracket} />}
             {screen === "legal"    && <LegalScreen key="legal" section={legalSection} />}
           </AnimatePresence>
           <AnimatePresence>
@@ -6364,7 +6484,7 @@ function CountdownCard({ onOpen }) {
             ⚡ 2026 Budget
           </div>
           <div style={{ color: "#F5F7FA", fontSize: 15, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
-            Negative gearing dies for existing properties.
+            Negative gearing ends for established homes bought after budget night.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#C5CAD6", marginBottom: 6, fontFamily: "ui-monospace, SF Mono, monospace" }}>
             <span style={{ color: "#F87171", fontWeight: 700 }}>{pad(hours)}h</span>
@@ -6407,7 +6527,7 @@ function NegativeGearingExplainer({ sampleProperty }) {
         What is negative gearing?
       </div>
       <div style={{ color: "#C5CAD6", fontSize: 11.5, lineHeight: 1.55, marginBottom: 12 }}>
-        It's the tax refund landlords get when a rental property costs more than it earns. The government gives back ~39% of the loss. <span style={{ color: "#F43F5E", fontWeight: 700 }}>From 1 Jul 2027 — only new builds keep this.</span>
+        It's the tax refund landlords get when a rental property costs more than it earns. The government gives back ~39% of the loss. <span style={{ color: "#F43F5E", fontWeight: 700 }}>From 1 Jul 2027, established homes bought after budget night lose this — only new builds (and existing investors) keep it.</span>
       </div>
 
       {/* Mini side-by-side — same property, two outcomes */}
