@@ -4889,6 +4889,17 @@ function AppInner() {
         .top-nav-mobile-match { display: none !important; }
         .top-nav-mobile-menu { display: none !important; }
 
+        /* ─── BALANCED HEADINGS — at every breakpoint ───
+           text-wrap: balance evens out line lengths so we never get a single
+           orphan word ("Aussie", "shortlist") stranded on its own line. */
+        .hero-h1, .screen-h1, .detail-h1, .bgt-h {
+          text-wrap: balance;
+        }
+        /* Stop bricks from creating horizontal scroll on mobile — every brick
+           lives in a flex column inside .screen-content so a stray wide child
+           shouldn't be able to push the whole page sideways. */
+        .bricks-web { overflow-x: hidden; }
+
         /* ─── TABLET — 720-980px ─── */
         @media (max-width: 980px) {
           .hero-h1 { font-size: 56px !important; }
@@ -5029,9 +5040,12 @@ function AppInner() {
           }
 
           /* ─── HERO — CENTERED, spacious, cinematic ─── */
+          /* The .bricks-web already adds 56px padding-top to clear the fixed
+             top nav, so the hero only needs a small breathing margin —
+             previous 92px stacked into a "where did the page go?" gap. */
           .hero-header {
-            margin-top: 92px !important;
-            margin-bottom: 36px !important;
+            margin-top: 24px !important;
+            margin-bottom: 24px !important;
             text-align: center !important;
             align-items: center !important;
             width: 100% !important;
@@ -5063,6 +5077,8 @@ function AppInner() {
           }
 
           /* ─── H1 — bold serif, centered, breathing room ─── */
+          /* text-wrap: balance is the magic that prevents "Aussie" from
+             ending up alone on its own line on a 393px iPhone screen. */
           .hero-h1,
           .screen-h1 {
             font-size: clamp(30px, 7.6vw, 40px) !important;
@@ -5072,17 +5088,20 @@ function AppInner() {
             text-align: center !important;
             max-width: 92vw !important;
             word-wrap: break-word !important;
+            text-wrap: balance !important;
             margin-bottom: 0 !important;
           }
-          /* Show mobile br, hide desktop space */
+          /* Legacy break helpers — neutralised on mobile so old uses don't
+             crash the new balanced wrapping. */
           .h1-break-desktop { display: none !important; }
-          .h1-break-mobile { display: inline !important; }
-          /* Italic accent — keep elegant weight on mobile */
+          .h1-break-mobile { display: none !important; }
+          /* Italic accent — keep elegant weight on mobile, allow inline wrap */
           .hero-h1 .h1-accent,
           .screen-h1 .h1-accent,
           .hero-h1 span[style*="italic"],
           .screen-h1 span[style*="italic"] {
             font-weight: 500 !important;
+            display: inline !important;
           }
 
           /* ─── HERO BACKGROUND — zoom in so dunes read behind headline ─── */
@@ -5363,8 +5382,9 @@ function AppInner() {
           .screen-h1 br {
             /* hidden via the h1-break-desktop wrapper; leave default for safety */
           }
-          /* Home page hero image — shorter on mobile so the headline isn't dwarfed */
-          .hero-header { margin-top: 100px !important; }
+          /* Home page hero — keep tight to the nav. The .bricks-web wrapper
+             already pads 56px to clear the fixed top bar. */
+          .hero-header { margin-top: 24px !important; }
 
           /* Drill-down video CTA — countdown clamp so the big 64px serif fits */
           .cta-countdown {
@@ -5446,7 +5466,7 @@ function AppInner() {
         @media (max-width: 380px) {
           .hero-h1, .screen-h1 { font-size: clamp(26px, 7.4vw, 32px) !important; }
           .detail-h1 { font-size: 24px !important; }
-          .hero-header { margin-top: 76px !important; }
+          .hero-header { margin-top: 20px !important; }
           .hero-header p { font-size: 15.5px !important; }
         }
       `}</style>
@@ -7019,20 +7039,21 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
           }} />
         </div>
 
-        {/* The headline — premium serif, italic gradient accent */}
+        {/* The headline — premium serif, italic gradient accent.
+            text-wrap: balance lets the browser pick line breaks that don't
+            leave a single word ("Aussie") stranded on its own line at any
+            viewport width. Forced <br/>s would lock breaks in the wrong place. */}
         <h1 className="hero-h1" style={{
           margin: 0,
           fontFamily: 'ui-serif, Georgia, "Times New Roman", serif',
           fontSize: 60, fontWeight: 500, letterSpacing: "-0.035em", lineHeight: 1.07,
           color: "#F5F7FA",
           maxWidth: 1000,
+          textWrap: "balance",
         }}>
-          <span className="h1-line1">Negative gearing just changed.</span>
-          <span className="h1-break-desktop"><br/></span>
-          <span className="h1-break-mobile"><br/></span>
-          <span>See which beautiful Aussie listings</span>
-          <span className="h1-break-desktop"><br/></span>
-          <span className="h1-break-mobile"><br/></span>
+          <span className="h1-clause" style={{ display: "block" }}>Negative gearing just changed.</span>
+          <span className="h1-clause">See which beautiful Aussie listings</span>
+          {" "}
           <span className="h1-accent" style={{
             fontStyle: "italic",
             fontWeight: 500,
@@ -7041,7 +7062,6 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
             backgroundClip: "text",
             WebkitTextFillColor: "transparent",
             color: "transparent",
-            display: "inline-block",
             lineHeight: 1.16,
             paddingBottom: "0.1em",
           }}>now bleed cash for 30 years</span>
