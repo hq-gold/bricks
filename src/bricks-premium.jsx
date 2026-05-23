@@ -1939,6 +1939,82 @@ function StudioSlider({ label, value, min, max, step, fmt, onChange, hint, icon:
   );
 }
 
+/**
+ * Tax-bracket chip selector for the Scenario Studio.
+ *
+ * Tax brackets are DISCRETE (the ATO publishes 4 bands) so a continuous slider
+ * is a UX trap — it lets the user land on phantom values like 27% or 41% that
+ * change the math but don't exist in real life. We show the four real bands
+ * (post-stage-3 + 2% Medicare levy) the same way Browse, Goals and Settings do,
+ * keeping the visual style aligned with StudioSlider's label + icon row.
+ */
+function BracketChips({ value, onChange }) {
+  const BRACKETS = [
+    { rate: 18, income: "Up to $45k" },
+    { rate: 32, income: "$45k–$135k" },
+    { rate: 39, income: "$135k–$190k" },
+    { rate: 47, income: "$190k+" },
+  ];
+  // Snap any incoming arbitrary value (legacy state) to the nearest real bracket.
+  const active = BRACKETS.reduce((prev, b) =>
+    Math.abs(b.rate - value) < Math.abs(prev.rate - value) ? b : prev,
+  BRACKETS[0]);
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "baseline",
+        marginBottom: 6,
+      }}>
+        <span style={{
+          fontSize: 12.5, color: "rgba(245,247,250,0.7)", fontWeight: 500,
+          display: "inline-flex", alignItems: "center", gap: 7,
+        }}>
+          <span style={{
+            width: 22, height: 22, borderRadius: 7, flexShrink: 0,
+            background: "rgba(251,113,133,0.13)",
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <Receipt size={12} color="#FB7185" strokeWidth={2.2} />
+          </span>
+          Your tax bracket
+        </span>
+        <motion.span key={active.rate}
+          initial={{ scale: 1.15, color: "#FB7185" }} animate={{ scale: 1, color: "#F5F7FA" }}
+          transition={{ duration: 0.25 }}
+          style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+          {active.rate}%
+        </motion.span>
+      </div>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4,
+        padding: 4, background: "rgba(255,255,255,0.04)", borderRadius: 9,
+        border: "1px solid rgba(255,255,255,0.09)",
+      }}>
+        {BRACKETS.map(b => {
+          const on = b.rate === active.rate;
+          return (
+            <button key={b.rate} onClick={() => onChange(b.rate)}
+              title={`${b.rate}% effective MTR — ${b.income} (incl. 2% Medicare levy)`}
+              style={{
+                cursor: "pointer", border: "none", borderRadius: 6,
+                padding: "8px 6px", fontSize: 11.5, fontWeight: 700,
+                background: on ? "rgba(251,113,133,0.18)" : "transparent",
+                color: on ? "#FECDD3" : "rgba(245,247,250,0.55)",
+                boxShadow: on ? "0 0 0 1px rgba(251,113,133,0.45) inset" : "none",
+                lineHeight: 1.1,
+              }}>
+              {b.rate}%
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 10, color: "rgba(245,247,250,0.38)", marginTop: 4 }}>
+        {active.income} earner · stage-3 + 2% Medicare levy
+      </div>
+    </div>
+  );
+}
+
 // ─── What-If card — a mini cashflow brick that responds to hypothetical wins ─
 // Pills apply a hypothetical improvement to the model. Framed as "what a better
 // deal would do" — never a promise that an agent/broker delivers a set figure.
@@ -2967,9 +3043,10 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 min={0} max={9} step={0.5}
                 fmt={v => `${v.toFixed(1)}%`} onChange={set("growthPct")}
                 hint="Your assumption — drives the equity projection" />
-              <StudioSlider label="Your tax bracket" icon={Receipt} value={vars.marginalRate}
-                min={0} max={47} step={1}
-                fmt={v => `${v}%`} onChange={set("marginalRate")} />
+              {/* Tax bracket is discrete (ATO ladder), not continuous — show
+                  the four real options as chips, never a slider that lands
+                  on phantom values like 27% or 41%. */}
+              <BracketChips value={vars.marginalRate} onChange={set("marginalRate")} />
             </div>
 
             {/* loan + property type toggles */}
