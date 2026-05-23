@@ -83,7 +83,7 @@ export default function AgentShareHub({
   const suburb = property?.suburb?.split(",")[0] || "your suburb";
   const price = fmtPrice(property?.price);
   const heroImage = property ? getPropertyHeroImage(property) : null;
-  const shareUrl = typeof window !== "undefined" ? window.location.origin : "https://thebricks.au";
+  const shareUrl = typeof window !== "undefined" ? window.location.origin : "https://thebricks.app";
   const rank = liveMarketInsights?.suburbRank ?? insights?.suburbRank;
   const rankTotal = liveMarketInsights?.suburbTotal ?? insights?.suburbTotal;
   const rankLine = rank && rankTotal

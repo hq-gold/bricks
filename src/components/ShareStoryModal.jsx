@@ -47,7 +47,7 @@ export default function ShareStoryModal({
     breakEvenLine,
     y1 != null ? `Year 1: ${fmtK(y1)}/yr` : null,
     y30 != null ? `Year 30: ${fmtK(y30)}/yr` : null,
-    "30-year after-tax cashflow under the 2026 rules — thebricks.au",
+    "30-year after-tax cashflow under the 2026 rules — thebricks.app",
   ].filter(Boolean).join("\n");
 
   const copyText = useCallback(async () => {
@@ -205,7 +205,7 @@ export default function ShareStoryModal({
               }}>
                 Post-2026 budget rules · not financial advice
               </div>
-              <div style={{ marginTop: 10, fontSize: 11, color: "rgba(245,247,250,0.35)" }}>thebricks.au</div>
+              <div style={{ marginTop: 10, fontSize: 11, color: "rgba(245,247,250,0.35)" }}>thebricks.app</div>
             </div>
           </div>
 

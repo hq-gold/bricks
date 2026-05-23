@@ -17,7 +17,7 @@ export function printVendorProspect({
   const price = property?.price
     ? `$${Math.round(property.price / 1000).toLocaleString()}k`
     : "—";
-  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(previewUrl || (typeof window !== "undefined" ? window.location.origin : "https://thebricks.au"))}`;
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(previewUrl || (typeof window !== "undefined" ? window.location.origin : "https://thebricks.app"))}`;
   const rankLine = marketRank && marketTotal
     ? `#${marketRank} of ${marketTotal} properties live on The Bricks in ${suburb} right now`
     : `a strong position among live listings in ${suburb}`;
