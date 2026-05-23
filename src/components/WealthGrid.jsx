@@ -56,8 +56,10 @@ export default function WealthGrid({
   showYearCallouts = true,
 }) {
   const gridRef = useRef(null);
+  const pillRef = useRef(null);
   const inView = useInView(gridRef, { once: true, amount: 0.3 });
   const shouldAnimate = animate && inView;
+  const [measuredPillWidth, setMeasuredPillWidth] = useState(0);
 
   const peak = Math.max(...monthlyEquity, 1);
   const finalEquity = monthlyEquity[monthlyEquity.length - 1] ?? 0;
@@ -85,6 +87,23 @@ export default function WealthGrid({
   const PILL_TO_GRID_GAP = 6;
   const heroCol = heroMilestone ? Math.min(cols - 1, heroMilestone.yearHit - 1) : 29;
   const heroLeftPx = heroCol * (cell + gap) + cell / 2;
+
+  // Clamp the pill so it never bleeds off the grid edges (the cashflow grid
+  // does the same dance). Measure the actual rendered width so a long label
+  // like "$2M NET WORTH · YEAR 25" gets exactly the right offset.
+  useLayoutEffect(() => {
+    if (pillRef.current) {
+      const w = pillRef.current.getBoundingClientRect().width;
+      if (w > 0 && Math.abs(w - measuredPillWidth) > 0.5) setMeasuredPillWidth(w);
+    }
+  });
+  const pillWidth = (measuredPillWidth || 180) + 10;
+  const PILL_EDGE_PAD = 6;
+  const pillMinX = pillWidth / 2 + PILL_EDGE_PAD;
+  const pillMaxX = gridWidth - pillWidth / 2 - PILL_EDGE_PAD;
+  const pillClampedX = heroMilestone
+    ? Math.max(pillMinX, Math.min(pillMaxX, heroLeftPx))
+    : gridWidth / 2;
 
   // Year callout values — equity at end of each landmark year.
   const timelinePoints = useMemo(() => {
@@ -153,9 +172,10 @@ export default function WealthGrid({
             </div>
           ) : (
             <div style={{
-              position: "absolute", left: `${heroLeftPx}px`, transform: "translateX(-50%)", top: 0,
+              position: "absolute", left: `${pillClampedX}px`, transform: "translateX(-50%)", top: 0,
             }}>
               <motion.div
+                ref={pillRef}
                 initial={animate ? { opacity: 0, y: -10 } : { opacity: 1, y: 0 }}
                 animate={shouldAnimate ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }}
                 transition={{ delay: 0.85, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
