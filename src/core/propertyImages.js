@@ -32,7 +32,19 @@ const IMAGE_URLS = {
 };
 
 export function getPropertyHeroImage(property) {
+  if (property?.gallery?.length) return property.gallery[0];
+  if (property?.heroImage) return property.heroImage;
   return IMAGE_URLS[property?.id] || "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=900&q=80";
+}
+
+/** Up to 4 gallery shots — uses property.gallery when provided. */
+export function getPropertyGalleryImages(property) {
+  if (property?.gallery?.length) {
+    const g = property.gallery;
+    if (g.length >= 4) return g.slice(0, 4);
+    return [...g, ...g.slice(1)].slice(0, 4);
+  }
+  return null;
 }
 
 export function fmtPrice(price) {

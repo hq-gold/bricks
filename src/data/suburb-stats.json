@@ -185,5 +185,49 @@
     "vacancyPct": 2.0,
     "daApprovals24m": 18,
     "suburbScore": 71
+  },
+  "paddington": {
+    "name": "Paddington",
+    "state": "NSW",
+    "salesLast12m": 142,
+    "medianPrice": 2450000,
+    "medianGrowth10y": 5.8,
+    "medianYieldPct": 2.6,
+    "vacancyPct": 1.3,
+    "daApprovals24m": 34,
+    "suburbScore": 74
+  },
+  "edgecliff": {
+    "name": "Edgecliff",
+    "state": "NSW",
+    "salesLast12m": 98,
+    "medianPrice": 1850000,
+    "medianGrowth10y": 5.6,
+    "medianYieldPct": 2.9,
+    "vacancyPct": 1.5,
+    "daApprovals24m": 22,
+    "suburbScore": 72
+  },
+  "bronte": {
+    "name": "Bronte",
+    "state": "NSW",
+    "salesLast12m": 76,
+    "medianPrice": 3200000,
+    "medianGrowth10y": 6.4,
+    "medianYieldPct": 2.7,
+    "vacancyPct": 1.2,
+    "daApprovals24m": 14,
+    "suburbScore": 73
+  },
+  "centennial-park": {
+    "name": "Centennial Park",
+    "state": "NSW",
+    "salesLast12m": 54,
+    "medianPrice": 2100000,
+    "medianGrowth10y": 5.2,
+    "medianYieldPct": 2.5,
+    "vacancyPct": 1.1,
+    "daApprovals24m": 8,
+    "suburbScore": 71
   }
 }

@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Plus, ChevronRight, Lock, Phone, Mail, Zap, Share2, Printer, ExternalLink } from "lucide-react";
 import PageHero from "../components/PageHero.jsx";
 import { DEMO_AGENT } from "../data/demo-agent.js";
+import { CATHERINE_DIXON } from "../data/catherine-dixon.js";
 import { getPropertyInsights } from "../propertyInsights.js";
 import { generateCashflow, yearTurnsPositive } from "../core/cashflow.js";
 import { getPropertyHeroImage, fmtPrice } from "../core/propertyImages.js";
@@ -277,7 +278,7 @@ export default function AgentPreviewScreen({
   engine,
   onOpenProperty,
 }) {
-  const agent = DEMO_AGENT;
+  const agent = CATHERINE_DIXON;
   const [shareRow, setShareRow] = useState(null);
   const [shareMode, setShareMode] = useState("prospect");
 

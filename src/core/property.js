@@ -27,10 +27,21 @@ export function propertyMeta(property) {
   if (property.build === "new") {
     status = property.price > 1000000 ? "Ready Mar 2027" : "Off-the-plan · 2027";
   } else {
-    status = t.includes("victorian") ? "c. 1890" :
+    status = property.listing?.yearBuilt
+      ? `Built ${property.listing.yearBuilt}`
+      : t.includes("victorian") ? "c. 1890" :
             t.includes("federation") ? "c. 1910" :
             t.includes("1980") ? "Built 1985" :
             t.includes("1990") ? "Built 1995" : "Pre-2000";
+  }
+  if (property?.meta) {
+    return {
+      beds: property.meta.beds ?? beds,
+      baths: property.meta.baths ?? baths,
+      parking: property.meta.parking ?? parking,
+      area: property.meta.area ?? Math.round(area),
+      status: property.meta.status ?? status,
+    };
   }
   return { beds, baths, parking, area: Math.round(area), status };
 }
@@ -44,34 +55,53 @@ export function propertyListing(property) {
   const isNew = property.build === "new";
   const t = (property.type || "House").toLowerCase();
   const suburb = (property.suburb || "").split(",")[0].trim();
+  const custom = property.listing || {};
 
-  const landSize = t.includes("apartment") || t.includes("unit")
-    ? null
-    : Math.round(m.area * (t.includes("town") ? 1.6 : 4.2) / 10) * 10;
-  const yearBuilt = isNew ? 2026 : property.price > 1100000 ? 1995 : 2008;
+  const landSize = custom.landSize ?? (
+    t.includes("apartment") || t.includes("unit")
+      ? null
+      : Math.round(m.area * (t.includes("town") ? 1.6 : 4.2) / 10) * 10
+  );
+  const yearBuilt = custom.yearBuilt ?? (isNew ? 2026 : property.price > 1100000 ? 1995 : 2008);
 
-  const desc = [
+  const desc = custom.desc ?? [
     `A ${m.beds}-bedroom ${t} in ${suburb}, with ${m.baths} bathroom${m.baths === 1 ? "" : "s"} and ${m.parking} car space${m.parking === 1 ? "" : "s"}.`,
     landSize
-      ? `Set on approximately ${landSize}m² of land, with ${m.area}m² of internal living area.`
-      : `Approximately ${m.area}m² of internal living area.`,
+      ? `Set on approximately ${landSize}m² of land${m.area ? `, with ${m.area}m² of internal living area` : ""}.`
+      : m.area
+        ? `Approximately ${m.area}m² of internal living area.`
+        : null,
     isNew
       ? `Newly built (${yearBuilt}) and covered by builder's warranty — eligible for the new-build tax treatment under the 2026 budget.`
       : `An established property (built ${yearBuilt}) — subject to the post-2027 negative gearing changes for established homes.`,
-  ];
+  ].filter(Boolean);
 
-  const inspections = isNew
-    ? ["Display home open daily · 10:00am–4:00pm"]
-    : ["Saturday 11:00am–11:30am", "Wednesday 5:30pm–6:00pm"];
+  const inspections = custom.inspections ?? (
+    isNew
+      ? ["Display home open daily · 10:00am–4:00pm"]
+      : ["Saturday 11:00am–11:30am", "Wednesday 5:30pm–6:00pm"]
+  );
 
-  const features = [
+  const features = custom.features ?? [
     `${m.beds} bedrooms`, `${m.baths} bathrooms`, `${m.parking} car spaces`,
-    landSize ? `${landSize}m² land` : `${m.area}m² internal`,
+    landSize ? `${landSize}m² land` : m.area ? `${m.area}m² internal` : null,
     isNew ? "Builder's warranty" : `Built ${yearBuilt}`,
     t.includes("apartment") ? "Strata title" : "Torrens title",
-  ];
+  ].filter(Boolean);
 
-  return { landSize, yearBuilt, desc, inspections, features, area: m.area };
+  return {
+    landSize,
+    yearBuilt,
+    desc,
+    inspections,
+    features,
+    area: m.area,
+    floorplanUrl: custom.floorplanUrl ?? null,
+    councilRates: custom.councilRates ?? null,
+    waterRates: custom.waterRates ?? null,
+    auction: custom.auction ?? null,
+    priceLabel: custom.priceLabel ?? null,
+  };
 }
 
 export function propertyTier(property) {

@@ -16,6 +16,7 @@ import MethodologyScreen from "./screens/MethodologyScreen.jsx";
 import AgentPreviewScreen from "./screens/AgentPreviewScreen.jsx";
 import LeaderboardScreen from "./screens/LeaderboardScreen.jsx";
 import { DEMO_AGENT } from "./data/demo-agent.js";
+import { CATHERINE_PROPS } from "./data/catherine-listings.js";
 import { getListingAgent } from "./data/demo-agencies.js";
 import VendorReportForm from "./screens/VendorReportForm.jsx";
 
@@ -300,8 +301,17 @@ const IMAGE_URLS = {
   51: "https://images.unsplash.com/photo-1613977257363-707ba9348227?w=900&q=80",  // Vaucluse family
   52: "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=900&q=80",  // Double Bay garden apt
   53: "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=900&q=80",     // Rose Bay new build
+  // Catherine Dixon — BresicWhitney (61 uses /listings/norfolk-21/ gallery)
+  61: "/listings/norfolk-21/hero.jpg",
+  62: "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=900&q=80",
+  63: "https://images.unsplash.com/photo-1613490493576-7fde63acd811?w=900&q=80",
+  64: "https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=900&q=80",
+  65: "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=900&q=80",
+  66: "https://images.unsplash.com/photo-1600210491892-03d54c0aaf87?w=900&q=80",
 };
 function getPropertyImage(property) {
+  if (property?.gallery?.length) return property.gallery[0];
+  if (property?.heroImage) return property.heroImage;
   return IMAGE_URLS[property.id] || "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=900&q=80";
 }
 
@@ -332,6 +342,11 @@ const GALLERY_POOLS = {
   ],
 };
 function getPropertyGallery(property) {
+  if (property?.gallery?.length) {
+    const g = property.gallery;
+    if (g.length >= 4) return g.slice(0, 4);
+    return [...g, ...g.slice(1)].slice(0, 4);
+  }
   const hero = getPropertyImage(property);
   const type = propertyTypeKey(property);
   const pool = GALLERY_POOLS[type] || GALLERY_POOLS.house;
@@ -2544,7 +2559,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                       <div style={{
                         fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
                         color: "rgba(245,247,250,0.5)", fontWeight: 600,
-                      }}>{propIn.build === "new" ? "From" : "Guide"}</div>
+                      }}>{propIn.listing?.priceLabel || (propIn.build === "new" ? "From" : "Guide")}</div>
                       <div style={{
                         fontFamily: 'ui-serif, Georgia, serif', fontSize: 26, fontWeight: 600,
                         color: "#F5F7FA",
@@ -2694,17 +2709,40 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                         <div style={{
                           background: "rgba(255,255,255,0.025)",
                           border: "1px solid rgba(255,255,255,0.07)",
-                          borderRadius: 12, padding: "14px 15px",
+                          borderRadius: 12, padding: L.floorplanUrl ? "10px" : "14px 15px",
+                          overflow: "hidden",
                         }}>
                           <div style={{
-                            display: "flex", alignItems: "center", gap: 7, marginBottom: 8,
+                            display: "flex", alignItems: "center", gap: 7, marginBottom: L.floorplanUrl ? 8 : 8,
+                            padding: L.floorplanUrl ? "4px 5px 0" : 0,
                           }}>
                             <Maximize2 size={14} color="rgba(245,247,250,0.5)" strokeWidth={2} />
                             <span style={{ fontSize: 12, fontWeight: 700, color: "#F5F7FA" }}>Floorplan</span>
                           </div>
-                          <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", lineHeight: 1.5 }}>
-                            {L.area}m² internal{L.landSize ? ` · ${L.landSize}m² land` : ""} · floorplan available on request
-                          </div>
+                          {L.floorplanUrl ? (
+                            <img
+                              src={L.floorplanUrl}
+                              alt={`${propIn.name} floorplan`}
+                              style={{
+                                width: "100%", display: "block", borderRadius: 8,
+                                background: "#fff",
+                              }}
+                            />
+                          ) : (
+                            <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", lineHeight: 1.5 }}>
+                              {L.area ? `${L.area}m² internal · ` : ""}{L.landSize ? `${L.landSize}m² land · ` : ""}floorplan available on request
+                            </div>
+                          )}
+                          {(L.councilRates || L.waterRates) && (
+                            <div style={{
+                              marginTop: 10, fontSize: 11.5, color: "rgba(245,247,250,0.45)", lineHeight: 1.55,
+                              padding: L.floorplanUrl ? "0 5px 5px" : 0,
+                            }}>
+                              {L.councilRates ? `Council $${L.councilRates.toLocaleString()}/yr` : ""}
+                              {L.councilRates && L.waterRates ? " · " : ""}
+                              {L.waterRates ? `Water $${L.waterRates.toLocaleString()}/yr` : ""}
+                            </div>
+                          )}
                         </div>
                         <div style={{
                           background: "rgba(255,255,255,0.025)",
@@ -2715,8 +2753,18 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                             display: "flex", alignItems: "center", gap: 7, marginBottom: 8,
                           }}>
                             <Search size={14} color="rgba(245,247,250,0.5)" strokeWidth={2} />
-                            <span style={{ fontSize: 12, fontWeight: 700, color: "#F5F7FA" }}>Inspections</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#F5F7FA" }}>
+                              {L.auction ? "Auction & inspections" : "Inspections"}
+                            </span>
                           </div>
+                          {L.auction && (
+                            <div style={{
+                              fontSize: 12.5, fontWeight: 600, color: "#FECDD3",
+                              marginBottom: 8, lineHeight: 1.5,
+                            }}>
+                              {L.auction}
+                            </div>
+                          )}
                           {L.inspections.map(ins => (
                             <div key={ins} style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", lineHeight: 1.6 }}>
                               {ins}
@@ -6256,7 +6304,7 @@ const AGENT_PREVIEW_PROPS = [
   },
 ];
 
-export const ALL_PROPS = [...SEED_PROPS, ...MORE_PROPS, ...EXISTING_PROPS, ...EASTERN_PROPS, ...AGENT_PREVIEW_PROPS];
+export const ALL_PROPS = [...SEED_PROPS, ...MORE_PROPS, ...EXISTING_PROPS, ...EASTERN_PROPS, ...AGENT_PREVIEW_PROPS, ...CATHERINE_PROPS];
 
 // ─── BROWSE SCREEN — the searchable database ─────────────────────────────────
 function CountdownInline() {
