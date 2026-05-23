@@ -310,15 +310,12 @@ function SceneH({ children, size = 52, style }) {
 
 const ROSE_GRAD = "linear-gradient(115deg, #FDE2E8 0%, #FB7185 50%, #FB923C 100%)";
 function GradText({ children }) {
-  return <span style={{
+  return <span className="gradient-text" style={{
     fontStyle: "italic", fontWeight: 500,
     background: ROSE_GRAD,
     WebkitBackgroundClip: "text", backgroundClip: "text",
     WebkitTextFillColor: "transparent", color: "transparent",
-    display: "inline-block",
     textAlign: "center",
-    lineHeight: 1.18,
-    paddingBottom: "0.14em",
   }}>{children}</span>;
 }
 

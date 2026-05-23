@@ -536,11 +536,11 @@ export default function GoalsScreen({
           color: "#F5F7FA",
         }}>
           What is this property{" "}
-          <span style={{
+          <span className="gradient-text" style={{
             fontStyle: "italic", fontWeight: 500,
             background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 60%, #FB923C 100%)",
             WebkitBackgroundClip: "text", backgroundClip: "text",
-            WebkitTextFillColor: "transparent",
+            WebkitTextFillColor: "transparent", color: "transparent",
           }}>actually paying for</span>?
         </h1>
         <p style={{

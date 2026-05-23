@@ -171,12 +171,11 @@ export default function PasswordGate({ children }) {
               }}
             >
               The 30-year{" "}
-              <span style={{
+              <span className="gradient-text" style={{
                 fontStyle: "italic", fontWeight: 500,
                 background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 48%, #FB923C 100%)",
                 WebkitBackgroundClip: "text", backgroundClip: "text",
                 WebkitTextFillColor: "transparent", color: "transparent",
-                display: "inline-block", lineHeight: 1.16, paddingBottom: "0.08em",
               }}>
                 truth
               </span>{" "}

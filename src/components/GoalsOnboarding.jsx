@@ -215,7 +215,7 @@ export default function GoalsOnboarding({ open, onComplete, onSkip }) {
                     fontWeight: 500, letterSpacing: "-0.03em", lineHeight: 1.12,
                   }}>
                     What is this property{" "}
-                    <span style={{
+                    <span className="gradient-text" style={{
                       fontStyle: "italic", fontWeight: 500,
                       background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 60%, #FB923C 100%)",
                       WebkitBackgroundClip: "text", backgroundClip: "text",
@@ -301,7 +301,7 @@ export default function GoalsOnboarding({ open, onComplete, onSkip }) {
                     fontWeight: 500, letterSpacing: "-0.03em", lineHeight: 1.12,
                   }}>
                     How much does each{" "}
-                    <span style={{
+                    <span className="gradient-text" style={{
                       fontStyle: "italic", fontWeight: 500,
                       background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 60%, #FB923C 100%)",
                       WebkitBackgroundClip: "text", backgroundClip: "text",

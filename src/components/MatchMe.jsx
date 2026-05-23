@@ -580,6 +580,12 @@ const accentStyle = {
   background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 60%, #FB923C 100%)",
   WebkitBackgroundClip: "text", backgroundClip: "text",
   WebkitTextFillColor: "transparent", color: "transparent",
+  display: "inline-block",
+  lineHeight: 1.22,
+  padding: "0.04em 0 0.18em",
+  marginBottom: "-0.18em",
+  WebkitBoxDecorationBreak: "clone",
+  boxDecorationBreak: "clone",
 };
 const leadStyle = {
   margin: "0 0 22px",

@@ -8,7 +8,7 @@ import ShareStoryModal from "./components/ShareStoryModal.jsx";
 import { loadStoredGoals } from "./components/GoalsOnboarding.jsx";
 import MatchMe from "./components/MatchMe.jsx";
 import GoalsScreen from "./screens/GoalsScreen.jsx";
-import ConciergeNudge, { trackPropertyOpen } from "./components/ConciergeNudge.jsx";
+import { trackPropertyOpen } from "./components/ConciergeNudge.jsx";
 import BudgetCTABand from "./components/BudgetCTABand.jsx";
 import { AgentShareHeader, AgentContactDock, ListingAgentPromo } from "./components/AgentShareChrome.jsx";
 import { parseRoute, navigateTo } from "./routing.js";
@@ -2444,7 +2444,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                     ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEven}</span></>
                     : <>Costs you every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
                 </div>
-                <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                <div className="brick-grid-wrap" style={{ display: "flex", justifyContent: "center", overflow: "hidden" }}>
                   <CashflowGrid cashflow={cashflow} cell={10} gap={2.5}
                     milestones={cashflowMilestones} showLabels={true} />
                 </div>
@@ -2487,7 +2487,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(wealth30)}</span>
                   {" "}by year 30 — the story buyers want to hear
                 </div>
-                <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                <div className="brick-grid-wrap" style={{ display: "flex", justifyContent: "center", overflow: "hidden" }}>
                   <WealthGrid
                     monthlyEquity={monthlyEquity}
                     loanBalance={loanBalance}
@@ -2849,7 +2849,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
         {/* ════════════════════════════════════════════════════════════════
             THE SCENARIO STUDIO — sliders, big cashflow brick, equity curve
         ════════════════════════════════════════════════════════════════ */}
-        <div style={{
+        <div className="studio-panel" style={{
           background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
           border: "1px solid rgba(255,255,255,0.10)",
           borderRadius: 24, padding: "36px 30px",
@@ -2922,7 +2922,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14,
           }}>
             {/* cashflow brick */}
-            <div style={{
+            <div className="studio-brick" style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
               border: "none", padding: "22px 20px",
             }}>
@@ -2934,7 +2934,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   ? "full negative gearing forever (new build)"
                   : "full NG until 1 July 2027, then losses quarantined to property income (established, post-budget)"}
               </div>
-              <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+              <div className="brick-grid-wrap" style={{ display: "flex", justifyContent: "center", overflow: "hidden" }}>
                 <CashflowGrid cashflow={cashflow} cell={11} gap={2.5}
                   milestones={cashflowMilestones} showLabels={true} />
               </div>
@@ -2962,7 +2962,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             </div>
 
             {/* equity brick */}
-            <div style={{
+            <div className="studio-brick" style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
               border: "none", padding: "22px 20px",
               display: "flex", flexDirection: "column",
@@ -2973,7 +2973,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", marginBottom: 20, lineHeight: 1.5 }}>
                 360 squares · gold fills as equity grows {vars.loanType === "pi" ? "· loan paydown below" : ""}
               </div>
-              <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", flex: 1, alignItems: "center" }}>
+              <div className="brick-grid-wrap" style={{ display: "flex", justifyContent: "center", overflow: "hidden", flex: 1, alignItems: "center" }}>
                 <WealthGrid
                   monthlyEquity={monthlyEquity}
                   loanBalance={loanBalance}
@@ -3006,7 +3006,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
           )}
 
           {/* SLIDERS — directly under the bricks so the link is obvious */}
-          <div style={{
+          <div className="studio-brick" style={{
             background: "rgba(255,255,255,0.018)", borderRadius: 16,
             border: "none", padding: "20px 18px",
             marginBottom: 14,
@@ -3186,7 +3186,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   ? <span style={{ color: "#4ADE80", fontWeight: 500 }}> · pays you from year {breakEven}</span>
                   : <span style={{ color: "#F87171", fontWeight: 500 }}> · never breaks even</span>}
               </div>
-              <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+              <div className="brick-grid-wrap" style={{ display: "flex", justifyContent: "center", overflow: "hidden" }}>
                 <CashflowGrid cashflow={cashflow} cell={9} gap={2}
                   milestones={cashflowMilestones} showLabels={true} />
               </div>
@@ -5092,6 +5092,29 @@ function AppInner() {
         .hero-h1, .screen-h1, .detail-h1, .bgt-h {
           text-wrap: balance;
         }
+
+        /* ─── GRADIENT TEXT — defeat the descender clip ───
+           Webkit clips background-clip:text to the line-box, not the actual
+           glyph extents. Italic descenders (g, y, p, italic terminals) get
+           their bottom pixels shaved off when the line-height is tight or the
+           span is rendered as plain inline. The fix is to give the span its
+           own inline-block bounding box with extra vertical room, and a
+           slightly taller line-height so the glyphs sit comfortably inside.
+           A negative bottom margin keeps the surrounding non-gradient text
+           sitting on the same visual baseline.
+
+           Apply by adding className=gradient-text to any span that uses
+           background-clip:text + transparent fill. */
+        .gradient-text {
+          display: inline-block;
+          line-height: 1.22;
+          padding: 0.04em 0 0.18em;
+          margin-bottom: -0.18em;
+          /* When the gradient wraps to multiple lines, decoration-skip ensures
+             italic descenders on intermediate lines aren't clipped. */
+          -webkit-box-decoration-break: clone;
+          box-decoration-break: clone;
+        }
         /* Stop bricks from creating horizontal scroll on mobile — every brick
            lives in a flex column inside .screen-content so a stray wide child
            shouldn't be able to push the whole page sideways. */
@@ -5146,6 +5169,21 @@ function AppInner() {
           .studio-strip { grid-template-columns: 1fr 1fr !important; }
           .brick-callouts { grid-template-columns: repeat(5, 1fr) !important; }
           .studio-buys { grid-template-columns: 1fr !important; }
+
+          /* ─── SCENARIO STUDIO — mobile padding ───
+             Desktop pads the studio panel 36/30 and each inner brick 22/20,
+             which leaves only a thin column for the 30-square grids on a
+             375px viewport. Tighten both so the cashflow + wealth grids
+             stop bumping the right edge AND the slider panel below stops
+             feeling squashed inside two layers of padding. */
+          .studio-panel { padding: 22px 14px !important; border-radius: 18px !important; }
+          .studio-brick { padding: 18px 12px !important; }
+          /* Defensive: any scaled grid or its wrapper must clip horizontally
+             instead of allowing horizontal scroll — even if ScaleToFit
+             miscalculates by a few pixels on slow first paint, we never want
+             a stray pixel of grid bleeding under the next brick or off the
+             right of the screen. */
+          .brick-grid-wrap { overflow: hidden !important; max-width: 100% !important; }
 
           /* Hide floating map button — its function is in the footer strip on mobile */
           .floating-map { display: none !important; }
@@ -5676,10 +5714,9 @@ function AppInner() {
         onOpenProperty={(id) => { setShowMatchMe(false); handleOpen(id); }}
       />
 
-      {/* Concierge nudge — appears after 3 property opens */}
-      <ConciergeNudge
-        onRequest={() => openReferral({ kind: "agent" })}
-      />
+      {/* Concierge "talk to a buyer's agent" popup intentionally removed —
+          the persistent agent CTA on the drill-down covers the same intent
+          without an interruptive overlay. */}
     </div>
   );
 }
@@ -5780,7 +5817,7 @@ function ScreenH1({ children, accent, fontSize = 64 }) {
       {accent && (
         <>
           {" "}
-          <span style={{
+          <span className="gradient-text" style={{
             fontStyle: "italic",
             fontWeight: 500,
             background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 48%, #FB923C 100%)",
@@ -5788,9 +5825,6 @@ function ScreenH1({ children, accent, fontSize = 64 }) {
             backgroundClip: "text",
             WebkitTextFillColor: "transparent",
             color: "transparent",
-            display: "inline-block",
-            lineHeight: 1.16,
-            paddingBottom: "0.12em",
           }}>{accent}</span>
         </>
       )}
@@ -7251,7 +7285,7 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
           <span className="h1-clause" style={{ display: "block" }}>Negative gearing just changed.</span>
           <span className="h1-clause">See which beautiful Aussie listings</span>
           {" "}
-          <span className="h1-accent" style={{
+          <span className="h1-accent gradient-text" style={{
             fontStyle: "italic",
             fontWeight: 500,
             background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 48%, #FB923C 100%)",
@@ -7259,8 +7293,6 @@ function BrowseScreen({ properties, goals, onOpen, onOpenBudget, wishlist, onTog
             backgroundClip: "text",
             WebkitTextFillColor: "transparent",
             color: "transparent",
-            lineHeight: 1.16,
-            paddingBottom: "0.1em",
           }}>now bleed cash for 30 years</span>
         </h1>
 

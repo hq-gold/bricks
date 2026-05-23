@@ -368,12 +368,11 @@ export default function LeaderboardScreen({
             maxWidth: 820,
           }}>
             10 live listings,{" "}
-            <span style={{
+            <span className="gradient-text" style={{
               fontStyle: "italic", fontWeight: 500,
               background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 48%, #FB923C 100%)",
               WebkitBackgroundClip: "text", backgroundClip: "text",
               WebkitTextFillColor: "transparent", color: "transparent",
-              display: "inline-block", lineHeight: 1.16, paddingBottom: "0.08em",
             }}>
               ranked.
             </span>

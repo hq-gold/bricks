@@ -45,12 +45,11 @@ function SectionHeader({ badge, title, accentLine, description, accent = "#FB718
       }}>
         {title}{" "}
         {accentLine && (
-          <span style={{
+          <span className="gradient-text" style={{
             fontStyle: "italic", fontWeight: 500,
             background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 50%, #FB923C 100%)",
             WebkitBackgroundClip: "text", backgroundClip: "text",
             WebkitTextFillColor: "transparent", color: "transparent",
-            display: "inline-block", lineHeight: 1.16,
           }}>
             {accentLine}
           </span>
@@ -405,12 +404,11 @@ export default function AgentPreviewScreen({
             maxWidth: 760,
           }}>
             Your private workspace,{" "}
-            <span style={{
+            <span className="gradient-text" style={{
               fontStyle: "italic", fontWeight: 500,
               background: "linear-gradient(90deg, #FDE2E8 0%, #FB7185 50%, #FB923C 100%)",
               WebkitBackgroundClip: "text", backgroundClip: "text",
               WebkitTextFillColor: "transparent", color: "transparent",
-              display: "inline-block", lineHeight: 1.16, paddingBottom: "0.08em",
             }}>
               {agent.name.split(" ")[0]}.
             </span>
