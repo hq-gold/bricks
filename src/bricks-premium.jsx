@@ -2346,15 +2346,15 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 </div>
               </div>
 
-              {/* THE 30-YEAR WEALTH BRICK — hero, full width */}
+              {/* THE 30-YEAR WEALTH BRICK — gold hero, year callouts under */}
               <div style={{
-                background: "linear-gradient(180deg, rgba(74,222,128,0.06), rgba(255,255,255,0.015))",
-                border: "1px solid rgba(74,222,128,0.18)",
+                background: "linear-gradient(180deg, rgba(251,191,36,0.08), rgba(255,255,255,0.015))",
+                border: "1px solid rgba(251,191,36,0.22)",
                 borderRadius: 20, padding: "24px 20px", marginBottom: 24,
               }}>
                 <div style={{
                   fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
-                  color: "#4ADE80", fontWeight: 700, marginBottom: 6,
+                  color: "#FBBF24", fontWeight: 700, marginBottom: 6,
                 }}>
                   30-year wealth
                 </div>
@@ -2363,14 +2363,17 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em", lineHeight: 1.25,
                 }}>
                   Builds{" "}
-                  <span style={{ color: "#4ADE80" }}>{fmtMoneyShort(wealth30)}</span>
+                  <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(wealth30)}</span>
                   {" "}by year 30 — the story buyers want to hear
                 </div>
                 <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                   <WealthGrid
                     monthlyEquity={monthlyEquity}
+                    loanBalance={loanBalance}
                     depositEquity={depositEquity}
                     cell={10} gap={2.5}
+                    showLoanStrip
+                    showYearCallouts
                   />
                 </div>
               </div>
@@ -2806,7 +2809,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 Cashflow — what it costs you
               </div>
               <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
-                360 squares · one per month · red costs you, green pays you
+                360 squares · <strong style={{ color: "rgba(245,247,250,0.7)" }}>after-tax at {vars.marginalRate}% bracket</strong> · {vars.build === "new" ? "negative gearing applied (new build)" : "no NG post-2027 (established)"}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                 <CashflowGrid cashflow={cashflow} cell={9} gap={2}
@@ -2842,16 +2845,19 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               display: "flex", flexDirection: "column",
             }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
-                Wealth — what you build
+                Equity — the wealth you build
               </div>
               <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
-                360 squares · one per month · cool early, hot as equity grows
+                360 squares · gold fills as equity grows {vars.loanType === "pi" ? "· loan paydown below" : ""}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", flex: 1, alignItems: "center" }}>
                 <WealthGrid
                   monthlyEquity={monthlyEquity}
+                  loanBalance={loanBalance}
                   depositEquity={depositEquity}
                   cell={9} gap={2}
+                  showLoanStrip
+                  showYearCallouts
                 />
               </div>
               <div style={{
@@ -2866,7 +2872,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   transition={{ duration: 0.3 }}
                   style={{
                     fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600,
-                    color: "#4ADE80",
+                    color: "#FBBF24",
                   }}>
                   ≈ {fmtMoneyShort(wealth30)}
                 </motion.div>

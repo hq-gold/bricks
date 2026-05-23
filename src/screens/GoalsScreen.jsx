@@ -15,6 +15,8 @@ import {
   cellSpectrum,
   yearTurnsPositive,
 } from "../core/cashflow.js";
+import WealthGrid from "../components/WealthGrid.jsx";
+import { computeWealthProjection, fmtMoneyShort } from "../core/wealthProjection.js";
 
 /**
  * GoalsScreen — the emotional centre of the app.
@@ -404,27 +406,22 @@ function WealthTile({ label, value, sub, accent, bg, border }) {
   );
 }
 
-// Equity projection — same model the detail page uses.
-// Walks both purchase price (capital growth) and remaining loan balance month
-// by month; the gap is your equity at year y.
-function projectEquity(property, horizonYears = 30) {
-  const price = property.price || 0;
-  const growth = (property.growthPct || 0) / 100;
-  const rate = (MODEL_DEFAULTS.rate || 0.0639);
-  const loanFraction = 1 - (MODEL_DEFAULTS.deposit || 0.20);
-  const startingLoan = price * loanFraction;
-  const months = horizonYears * 12;
-  const monthlyRate = rate / 12;
-  // Engine defaults to interest-only (matches our cashflow model), so the
-  // loan balance stays flat through year 30 — equity comes purely from growth.
-  const loanAt = (m) => startingLoan;
-  const series = [];
-  for (let y = 1; y <= horizonYears; y++) {
-    const valueAtY = price * Math.pow(1 + growth, y);
-    const equityAtY = valueAtY - loanAt(y * 12);
-    series.push(Math.max(0, Math.round(equityAtY)));
-  }
-  return series;
+// Build a vars shape for computeWealthProjection from a property + assumptions.
+function buildWealthVars(property, marginalRate) {
+  const price = property?.price || 0;
+  return {
+    price,
+    deposit: 20,
+    rate: (MODEL_DEFAULTS.rate ?? 0.0639) * 100,
+    growthPct: property?.growthPct || 5,
+    marginalRate,
+    build: property?.build || "existing",
+    state: property?.state || "NSW",
+    loanType: "io",
+    rentPerWeek: Math.round(((property?.price || 0) * ((property?.yieldPct || 4) / 100)) / 52),
+    rentGrowth: 3,
+    pporYears: 0,
+  };
 }
 
 export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, onTab }) {
@@ -441,6 +438,7 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
   }, [properties]);
   const [selectedId, setSelectedId] = useState(defaultPropertyId);
   const [horizonYears, setHorizonYears] = useState(30);
+  const [marginalRate, setMarginalRate] = useState(39);
   const selectedProperty = properties.find(p => p.id === selectedId) || properties[0];
 
   // Persist any goals change immediately
@@ -449,10 +447,16 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
     onChangeGoals(next);
   }, [onChangeGoals]);
 
-  // Compute cashflow + goal achievements for the chosen property
+  // Compute cashflow + goal achievements for the chosen property at the
+  // user's chosen tax bracket — so what they see on the brick is what they'd
+  // actually take home (negative gearing applied at THEIR marginal rate).
+  const cashflowConfig = useMemo(() => {
+    if (!selectedProperty) return null;
+    return { ...selectedProperty, marginalRate: marginalRate / 100 };
+  }, [selectedProperty, marginalRate]);
   const cashflow = useMemo(
-    () => selectedProperty ? generateCashflow(selectedProperty) : new Array(360).fill(0),
-    [selectedProperty]
+    () => cashflowConfig ? generateCashflow(cashflowConfig) : new Array(360).fill(0),
+    [cashflowConfig]
   );
   const breakEvenYear = useMemo(() => yearTurnsPositive(cashflow), [cashflow]);
   const achievements = useMemo(
@@ -462,12 +466,16 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
   const covered = achievements.filter(a => a.yearHit && a.yearHit <= horizonYears);
   const notCovered = achievements.filter(a => !a.yearHit || a.yearHit > horizonYears);
 
-  // Equity series — for the chosen property, year-by-year equity assuming the
-  // engine's growth + interest-only loan model. Used for the equity stat strip.
-  const equitySeries = useMemo(
-    () => selectedProperty ? projectEquity(selectedProperty, 30) : [],
-    [selectedProperty]
+  // Wealth projection — monthly equity + loan balance for the WealthGrid.
+  const wealthVars = useMemo(
+    () => selectedProperty ? buildWealthVars(selectedProperty, marginalRate) : null,
+    [selectedProperty, marginalRate],
   );
+  const wealthProjection = useMemo(
+    () => (wealthVars ? computeWealthProjection(wealthVars, cashflow) : null),
+    [wealthVars, cashflow],
+  );
+  const equitySeries = wealthProjection?.equitySeries ?? [];
   const equityAtHorizon = equitySeries[horizonYears - 1] || 0;
   const lifetimeNetInHorizon = useMemo(() => {
     const months = horizonYears * 12;
@@ -617,43 +625,85 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
               onSelect={setSelectedId} />
           </div>
 
-          {/* Horizon switch — buyers planning a 10 or 20yr hold see what
-              actually happens in their window, with the brick dimming after */}
+          {/* Horizon switch + tax bracket — shape the brick honestly to YOUR
+              numbers. Tax bracket flips negative gearing on/off in real time. */}
           <div className="goals-horizon-row" style={{
             display: "flex", flexWrap: "wrap", alignItems: "center",
-            gap: 10, marginBottom: 22,
+            gap: 18, marginBottom: 22,
           }}>
-            <span style={{
-              fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
-              color: "rgba(245,247,250,0.55)", fontWeight: 700,
-            }}>I plan to hold for</span>
-            <div style={{
-              display: "inline-flex", padding: 3, gap: 2,
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 999,
-            }}>
-              {[10, 20, 30].map(y => {
-                const on = horizonYears === y;
-                return (
-                  <button key={y} onClick={() => setHorizonYears(y)}
-                    style={{
-                      cursor: "pointer", border: "none",
-                      borderRadius: 999, padding: "7px 14px",
-                      fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
-                      background: on
-                        ? "linear-gradient(135deg, rgba(96,165,250,0.22), rgba(96,165,250,0.10))"
-                        : "transparent",
-                      color: on ? "#BFDBFE" : "rgba(245,247,250,0.55)",
-                      boxShadow: on
-                        ? "0 0 0 1px rgba(96,165,250,0.45) inset"
-                        : "none",
-                    }}>
-                    {y} years
-                  </button>
-                );
-              })}
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+              <span style={{
+                fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+                color: "rgba(245,247,250,0.55)", fontWeight: 700,
+              }}>I plan to hold for</span>
+              <div style={{
+                display: "inline-flex", padding: 3, gap: 2,
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 999,
+              }}>
+                {[10, 20, 30].map(y => {
+                  const on = horizonYears === y;
+                  return (
+                    <button key={y} onClick={() => setHorizonYears(y)}
+                      style={{
+                        cursor: "pointer", border: "none",
+                        borderRadius: 999, padding: "7px 14px",
+                        fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
+                        background: on
+                          ? "linear-gradient(135deg, rgba(96,165,250,0.22), rgba(96,165,250,0.10))"
+                          : "transparent",
+                        color: on ? "#BFDBFE" : "rgba(245,247,250,0.55)",
+                        boxShadow: on
+                          ? "0 0 0 1px rgba(96,165,250,0.45) inset"
+                          : "none",
+                      }}>
+                      {y} years
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+              <span style={{
+                fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+                color: "rgba(245,247,250,0.55)", fontWeight: 700,
+              }}>Tax bracket</span>
+              <div style={{
+                display: "inline-flex", padding: 3, gap: 2,
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 999,
+              }}>
+                {[16, 30, 37, 45].map(b => {
+                  const on = marginalRate === b;
+                  return (
+                    <button key={b} onClick={() => setMarginalRate(b)}
+                      style={{
+                        cursor: "pointer", border: "none",
+                        borderRadius: 999, padding: "7px 12px",
+                        fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
+                        background: on
+                          ? "linear-gradient(135deg, rgba(251,191,36,0.22), rgba(251,191,36,0.08))"
+                          : "transparent",
+                        color: on ? "#FDE68A" : "rgba(245,247,250,0.55)",
+                        boxShadow: on
+                          ? "0 0 0 1px rgba(251,191,36,0.45) inset"
+                          : "none",
+                      }}>
+                      {b}%
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div style={{
+            margin: "-12px 2px 22px", fontSize: 11.5, lineHeight: 1.5,
+            color: "rgba(245,247,250,0.45)",
+          }}>
+            Brick shown is <strong style={{ color: "rgba(245,247,250,0.7)" }}>after-tax</strong> — negative gearing
+            losses are refunded at your {marginalRate}% bracket each year (where eligible under 2026 budget rules).
           </div>
 
           {noGoals ? (
@@ -681,6 +731,11 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
             </div>
           ) : (
             <>
+              {/* Cashflow brick — goals as emojis */}
+              <div style={{
+                fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
+                color: "#FB7185", marginBottom: 4,
+              }}>30-year cashflow · what pays for your life</div>
               <div style={{
                 display: "flex", justifyContent: "center",
                 padding: "12px 4px 60px",
@@ -693,25 +748,65 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
                   horizonYear={horizonYears} />
               </div>
 
+              {/* Wealth brick — equity built alongside the cashflow story */}
+              {wealthProjection && (
+                <div style={{
+                  marginTop: -36, marginBottom: 24,
+                  background: "linear-gradient(180deg, rgba(251,191,36,0.06), rgba(255,255,255,0.012))",
+                  border: "1px solid rgba(251,191,36,0.18)",
+                  borderRadius: 18, padding: "20px 22px",
+                }}>
+                  <div style={{
+                    display: "flex", flexWrap: "wrap", alignItems: "baseline",
+                    justifyContent: "space-between", gap: 10, marginBottom: 14,
+                  }}>
+                    <div>
+                      <div style={{
+                        fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
+                        color: "#FBBF24", marginBottom: 4,
+                      }}>30-year wealth · what you'll be worth</div>
+                      <div style={{
+                        fontFamily: 'ui-serif, Georgia, serif', fontSize: 18, fontWeight: 500,
+                        color: "#F5F7FA", letterSpacing: "-0.01em",
+                      }}>
+                        Equity grows from your deposit to{" "}
+                        <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(equitySeries[29] || 0)}</span>
+                        {" "}by year 30
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                    <WealthGrid
+                      monthlyEquity={wealthProjection.monthlyEquity}
+                      loanBalance={wealthProjection.loanBalance}
+                      depositEquity={wealthProjection.depositEquity}
+                      cell={9} gap={2}
+                      showLoanStrip={false}
+                      showYearCallouts
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Equity + wealth at horizon — answers "what am I worth at
                   the end of my hold?" without leaving the goals page. */}
               <div className="goals-wealth-strip" style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 12, marginTop: -32, marginBottom: 4,
+                gap: 12, marginBottom: 4,
               }}>
                 <WealthTile
                   label={`Equity at year ${horizonYears}`}
                   value={fmt(equityAtHorizon)}
                   sub="What you'd walk away with"
-                  accent="#93C5FD"
-                  bg="rgba(96,165,250,0.06)"
-                  border="rgba(96,165,250,0.20)"
+                  accent="#FBBF24"
+                  bg="rgba(251,191,36,0.06)"
+                  border="rgba(251,191,36,0.20)"
                 />
                 <WealthTile
                   label={`Cashflow ${horizonYears}yr`}
                   value={fmt(lifetimeNetInHorizon)}
-                  sub={lifetimeNetInHorizon >= 0 ? "Net into your pocket" : "Total bleed before exit"}
+                  sub={lifetimeNetInHorizon >= 0 ? "Net into your pocket (after-tax)" : "Total bleed before exit (after-tax)"}
                   accent={lifetimeNetInHorizon >= 0 ? "#86EFAC" : "#FCA5A5"}
                   bg={lifetimeNetInHorizon >= 0 ? "rgba(34,197,94,0.06)" : "rgba(244,63,94,0.06)"}
                   border={lifetimeNetInHorizon >= 0 ? "rgba(34,197,94,0.20)" : "rgba(244,63,94,0.20)"}

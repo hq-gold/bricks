@@ -12,16 +12,15 @@ const STORAGE_KEY = "bricks-goals-v1";
 // confirms or tweaks the dollar amount on the second step. Amounts default to
 // realistic AUD figures for 2026.
 export const GOAL_CATALOGUE = [
-  { id: "bali", emoji: "🏝️", name: "Family Bali trip", defaultAmount: 8000, type: "yearly", hint: "/ year" },
-  { id: "dinners", emoji: "🍷", name: "Friday dinners out", defaultAmount: 6000, type: "yearly", hint: "/ year" },
-  { id: "car", emoji: "🚗", name: "New car every 5 years", defaultAmount: 12000, type: "yearly", hint: "/ year" },
-  { id: "school", emoji: "🎓", name: "Private school fees", defaultAmount: 28000, type: "yearly", hint: "/ year" },
   { id: "mortgage", emoji: "🏠", name: "Pay off our home loan", defaultAmount: 35000, type: "yearly", hint: "/ year" },
-  { id: "kids", emoji: "👶", name: "Help the kids buy a place", defaultAmount: 150000, type: "cumulative", hint: "one-off" },
-  { id: "freedom", emoji: "🌴", name: "Financial freedom", defaultAmount: 120000, type: "yearly", hint: "/ year passive" },
+  { id: "salary", emoji: "💼", name: "Replace my salary", defaultAmount: 120000, type: "yearly", hint: "/ year passive" },
+  { id: "retire", emoji: "👴", name: "Retire by 60", defaultAmount: 90000, type: "yearly", hint: "/ year passive" },
+  { id: "fire", emoji: "🆓", name: "Full financial freedom", defaultAmount: 150000, type: "yearly", hint: "/ year passive" },
+  { id: "school", emoji: "🎓", name: "Private school + uni", defaultAmount: 35000, type: "yearly", hint: "/ year" },
+  { id: "kids", emoji: "👶", name: "Help the kids buy a home", defaultAmount: 150000, type: "cumulative", hint: "one-off" },
   { id: "second", emoji: "🏖️", name: "A holiday house", defaultAmount: 700000, type: "cumulative", hint: "one-off" },
-  { id: "boat", emoji: "⛵", name: "Boat / RV / toys", defaultAmount: 80000, type: "cumulative", hint: "one-off" },
-  { id: "retire", emoji: "👴", name: "Retire by 55", defaultAmount: 90000, type: "yearly", hint: "/ year passive" },
+  { id: "legacy", emoji: "🌳", name: "Generational wealth", defaultAmount: 2000000, type: "cumulative", hint: "leave behind" },
+  { id: "yearoff", emoji: "⏸️", name: "Take a year off work", defaultAmount: 120000, type: "cumulative", hint: "one-off" },
 ];
 
 export function hasCompletedOnboarding() {
@@ -64,7 +63,7 @@ export function saveGoals(goals) {
 
 export default function GoalsOnboarding({ open, onComplete, onSkip }) {
   const [step, setStep] = useState(0);
-  const [selectedIds, setSelectedIds] = useState(() => new Set(["bali", "school", "freedom"]));
+  const [selectedIds, setSelectedIds] = useState(() => new Set(["mortgage", "retire", "kids"]));
   const [amounts, setAmounts] = useState(() => {
     const initial = {};
     for (const g of GOAL_CATALOGUE) initial[g.id] = g.defaultAmount;
