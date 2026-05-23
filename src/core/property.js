@@ -101,6 +101,8 @@ export function propertyListing(property) {
     waterRates: custom.waterRates ?? null,
     auction: custom.auction ?? null,
     priceLabel: custom.priceLabel ?? null,
+    heritage: custom.heritage ?? null,
+    tenancyNote: custom.tenancyNote ?? null,
   };
 }
 

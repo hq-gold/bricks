@@ -19,6 +19,13 @@ import { DEMO_AGENT } from "./data/demo-agent.js";
 import { CATHERINE_PROPS } from "./data/catherine-listings.js";
 import { getListingAgent } from "./data/demo-agencies.js";
 import VendorReportForm from "./screens/VendorReportForm.jsx";
+import WealthGrid from "./components/WealthGrid.jsx";
+import {
+  computeWealthProjection,
+  isWealthFirstProperty,
+  studioSliderBounds,
+  fmtMoneyShort,
+} from "./core/wealthProjection.js";
 
 // Budget scrollytelling page — ~1k lines of marketing scenes. Lazy-loaded
 // so the Research-first critical path stays small (saves ~50KB on first load,
@@ -1843,7 +1850,9 @@ function PhotoGallery({ property }) {
 
 // ─── Studio slider — draggable lever with live value + micro-feedback ───────
 function StudioSlider({ label, value, min, max, step, fmt, onChange, hint, icon: Icon }) {
-  const pct = ((value - min) / (max - min)) * 100;
+  const effMin = Math.min(min, value);
+  const effMax = Math.max(max, value);
+  const pct = effMax === effMin ? 100 : ((value - effMin) / (effMax - effMin)) * 100;
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{
@@ -1872,7 +1881,7 @@ function StudioSlider({ label, value, min, max, step, fmt, onChange, hint, icon:
           {fmt(value)}
         </motion.span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value}
+      <input type="range" min={effMin} max={effMax} step={step} value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
         style={{
           width: "100%", height: 6, borderRadius: 999, appearance: "none",
@@ -1883,65 +1892,6 @@ function StudioSlider({ label, value, min, max, step, fmt, onChange, hint, icon:
         <div style={{ fontSize: 10, color: "rgba(245,247,250,0.38)", marginTop: 4 }}>{hint}</div>
       )}
     </div>
-  );
-}
-
-// ─── Equity brick — wealth as a filling grid, same language as cashflow ─────
-// 30 columns (years) × 10 rows. Each column fills from the bottom in proportion
-// to projected equity that year. A projection — driven by the growth slider.
-function EquityBrick({ equitySeries, cell = 13, gap = 3 }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, amount: 0.3 });
-  const ROWS = 10, COLS = 30;
-  const peak = Math.max(...equitySeries, 1);
-  const finalK = Math.round(equitySeries[29] / 1000);
-  const brickWidth = COLS * cell + (COLS - 1) * gap;
-
-  return (
-    <ScaleToFit contentWidth={brickWidth}>
-    <div ref={ref} style={{ width: brickWidth }}>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: `repeat(${COLS}, ${cell}px)`,
-        gridTemplateRows: `repeat(${ROWS}, ${cell}px)`,
-        gap: `${gap}px`, gridAutoFlow: "column",
-      }}>
-        {Array.from({ length: COLS }).map((_, c) => {
-          // how many of the 10 rows are "lit" this year
-          const litRows = Math.round((Math.max(0, equitySeries[c]) / peak) * ROWS);
-          return Array.from({ length: ROWS }).map((_, r) => {
-            // row 0 = bottom. lit if (ROWS-1-r) < litRows
-            const fromBottom = ROWS - 1 - r;
-            const lit = fromBottom < litRows;
-            // brighter towards the top of the lit stack
-            const intensity = lit ? 0.35 + (fromBottom / ROWS) * 0.65 : 0;
-            return (
-              <motion.div key={`${c}-${r}`}
-                initial={false}
-                animate={{
-                  backgroundColor: lit
-                    ? `rgba(96,165,250,${intensity})`
-                    : "rgba(255,255,255,0.035)",
-                }}
-                transition={{ duration: 0.45, delay: inView ? c * 0.012 : 0 }}
-                style={{ borderRadius: 3 }} />
-            );
-          });
-        })}
-      </div>
-      {/* year ticks */}
-      <div style={{
-        display: "grid", gridTemplateColumns: `repeat(${COLS}, ${cell}px)`,
-        gap: `${gap}px`, marginTop: 6,
-      }}>
-        {Array.from({ length: COLS }).map((_, c) => (
-          <div key={c} style={{
-            fontSize: 8, textAlign: "center", color: "rgba(245,247,250,0.32)",
-          }}>{[0, 9, 19, 29].includes(c) ? `Y${c + 1}` : ""}</div>
-        ))}
-      </div>
-    </div>
-    </ScaleToFit>
   );
 }
 
@@ -2044,6 +1994,54 @@ function WhatIfCard({ baseConfig, pills, accent, title, cell = 11 }) {
       </div>
     </div>
   );
+}
+
+// ─── Wealth-first banner — premium established properties ─────────────────────
+function WealthEquationBanner({ weeklyCost, wealth30, growthPct }) {
+  return (
+    <div style={{
+      padding: "18px 20px", borderRadius: 16, marginBottom: 20,
+      background: "linear-gradient(135deg, rgba(251,191,36,0.14) 0%, rgba(251,191,36,0.04) 100%)",
+      border: "1px solid rgba(251,191,36,0.28)",
+    }}>
+      <div style={{
+        fontSize: 10.5, letterSpacing: "0.14em", textTransform: "uppercase",
+        color: "rgba(251,191,36,0.75)", fontWeight: 700, marginBottom: 8,
+      }}>
+        The wealth equation
+      </div>
+      <div style={{
+        fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
+        color: "#F5F7FA", letterSpacing: "-0.02em", lineHeight: 1.35,
+      }}>
+        Costs you{" "}
+        <span style={{ color: "#F87171" }}>${Math.round(Math.abs(weeklyCost))}/wk</span>
+        {" "}to hold · Builds{" "}
+        <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(wealth30)}</span>
+        {" "}in wealth over 30 years
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12.5, color: "rgba(245,247,250,0.5)", lineHeight: 1.5 }}>
+        Premium established homes rarely pay their way on rent — the story is capital growth at {growthPct}% p.a.
+      </div>
+    </div>
+  );
+}
+
+function buildStudioStripStats({ wealthFirst, y1Weekly, breakEven, wealth10, wealth30 }) {
+  if (wealthFirst) {
+    return [
+      { label: "Costs to hold", value: `$${Math.round(Math.abs(y1Weekly))}`, unit: "per week now", c: "#F87171" },
+      { label: "Wealth by yr 10", value: fmtMoneyShort(wealth10), unit: "equity built", c: "#FBBF24" },
+      { label: "Wealth by yr 30", value: fmtMoneyShort(wealth30), unit: "projected net worth", c: "#FBBF24" },
+      { label: "Cashflow return", value: breakEven ? `Yr ${breakEven}` : "Never", unit: breakEven ? "bonus if it pays" : "hold for wealth, not yield", c: breakEven ? "#4ADE80" : "rgba(245,247,250,0.45)" },
+    ];
+  }
+  return [
+    { label: "Costs you now", value: `$${Math.round(Math.abs(y1Weekly))}`, unit: "per week", c: "#F87171" },
+    { label: "Turns positive", value: breakEven ? `Yr ${breakEven}` : "Never", unit: breakEven ? "pays you from here" : "in 30 years", c: breakEven ? "#4ADE80" : "#F87171" },
+    { label: "Wealth by yr 10", value: `$${Math.round(wealth10 / 1000)}k`, unit: "equity + cashflow", c: wealth10 >= 0 ? "#4ADE80" : "#F87171" },
+    { label: "Owned by yr 30", value: fmtMoneyShort(wealth30), unit: "projected equity", c: "#93C5FD" },
+  ];
 }
 
 function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudget, wishlisted, onToggleWishlist }) {
@@ -2155,34 +2153,22 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
   const y1Weekly = y1Monthly * 12 / 52;
   const gap = Math.round(lifetimeNet - lifetimeNetAlt);
 
+  const wealthFirst = useMemo(() => isWealthFirstProperty(propIn, vars), [propIn, vars]);
+  const sliderBounds = useMemo(
+    () => studioSliderBounds(propIn.price, vars.price, vars.rentPerWeek),
+    [propIn.price, vars.price, vars.rentPerWeek],
+  );
 
-  // ── Equity projection — property value growth minus loan paydown ───────────
-  // Clearly a forecast: value compounds at growthPct; loan amortises (P&I) or
-  // stays flat (IO). Equity = value − loan balance + cumulative cashflow.
-  const equitySeries = useMemo(() => {
-    const loan0 = vars.price * (1 - vars.deposit / 100);
-    const monthlyRate = (vars.rate / 100) / 12;
-    const termM = 30 * 12;
-    // P&I monthly repayment
-    const piM = monthlyRate > 0
-      ? loan0 * monthlyRate / (1 - Math.pow(1 + monthlyRate, -termM))
-      : loan0 / termM;
-    const out = [];
-    let bal = loan0, cumCash = 0;
-    for (let y = 1; y <= 30; y++) {
-      for (let m = 0; m < 12; m++) {
-        if (vars.loanType === "pi") {
-          const interest = bal * monthlyRate;
-          bal = Math.max(0, bal - (piM - interest));
-        }
-        cumCash += cashflow[(y - 1) * 12 + m] ?? 0;
-      }
-      const value = vars.price * Math.pow(1 + vars.growthPct / 100, y);
-      out.push(Math.round(value - bal + cumCash));
-    }
-    return out;
-  }, [vars, cashflow]);
+  const { monthlyEquity, loanBalance, equitySeries, depositEquity } = useMemo(
+    () => computeWealthProjection(vars, cashflow),
+    [vars, cashflow],
+  );
   const wealth10 = equitySeries[9] ?? 0;
+  const wealth30 = equitySeries[29] ?? 0;
+  const studioStripStats = useMemo(
+    () => buildStudioStripStats({ wealthFirst, y1Weekly, breakEven, wealth10, wealth30 }),
+    [wealthFirst, y1Weekly, breakEven, wealth10, wealth30],
+  );
 
   const isNew = vars.build === "new";
   const fmt0 = (n) => `$${Math.round(Math.abs(n)).toLocaleString()}`;
@@ -2345,18 +2331,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               </div>
 
               {/* Hero stats — the four numbers that matter */}
+              {wealthFirst && (
+                <WealthEquationBanner weeklyCost={y1Weekly} wealth30={wealth30} growthPct={vars.growthPct} />
+              )}
               <div className="studio-strip" style={{
                 display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1,
                 background: "rgba(255,255,255,0.07)",
                 border: "1px solid rgba(255,255,255,0.08)",
                 borderRadius: 16, overflow: "hidden", marginBottom: 24,
               }}>
-                {[
-                  { label: "Costs you now", value: `$${Math.round(Math.abs(y1Weekly))}`, unit: "per week", c: "#F87171" },
-                  { label: "Turns positive", value: breakEven ? `Yr ${breakEven}` : "Never", unit: breakEven ? "pays you from here" : "in 30 years", c: breakEven ? "#4ADE80" : "#F87171" },
-                  { label: "Wealth by yr 10", value: `$${Math.round(wealth10 / 1000)}k`, unit: "equity + cashflow", c: wealth10 >= 0 ? "#4ADE80" : "#F87171" },
-                  { label: "Owned by yr 30", value: `$${Math.round((equitySeries[29] || 0) / 1000)}k`, unit: "projected equity", c: "#93C5FD" },
-                ].map(s => (
+                {studioStripStats.map(s => (
                   <div key={s.label} style={{ background: "#0B0D12", padding: "16px 10px", textAlign: "center" }}>
                     <div style={{
                       fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase",
@@ -2371,7 +2355,39 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 ))}
               </div>
 
-              {/* THE 30-YEAR BRICK — hero, full width */}
+              {/* Wealth brick — hero for premium established */}
+              {wealthFirst && (
+                <div style={{
+                  background: "linear-gradient(180deg, rgba(251,191,36,0.1), rgba(255,255,255,0.015))",
+                  border: "1px solid rgba(251,191,36,0.28)",
+                  borderRadius: 20, padding: "24px 20px", marginBottom: 24,
+                }}>
+                  <div style={{
+                    fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase",
+                    color: "#FBBF24", fontWeight: 700, marginBottom: 6,
+                  }}>
+                    30-year wealth
+                  </div>
+                  <div style={{
+                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
+                    color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em", lineHeight: 1.25,
+                  }}>
+                    Builds{" "}
+                    <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(wealth30)}</span>
+                    {" "}by year 30 — the story buyers want to hear
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                    <WealthGrid
+                      monthlyEquity={monthlyEquity}
+                      loanBalance={loanBalance}
+                      depositEquity={depositEquity}
+                      cell={10} gap={2.5}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* THE 30-YEAR CASHFLOW BRICK */}
               <div style={{
                 background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
                 border: "1px solid rgba(255,255,255,0.1)",
@@ -2387,9 +2403,11 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 500,
                   color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em",
                 }}>
-                  {breakEven
-                    ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEven}</span></>
-                    : <>Costs you every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
+                  {wealthFirst
+                    ? <>Honest holding cost — <span style={{ color: "#F87171" }}>${Math.round(Math.abs(y1Weekly))}/wk</span> to hold</>
+                    : breakEven
+                      ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEven}</span></>
+                      : <>Costs you every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
                 </div>
                 <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                   <CashflowGrid cashflow={cashflow} cell={10} gap={2.5}
@@ -2414,7 +2432,8 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 </div>
               </div>
 
-              {/* Equity growth — the sell story for vendors */}
+              {/* Equity growth — standard layout for non-wealth-first */}
+              {!wealthFirst && (
               <div style={{
                 background: "linear-gradient(180deg, rgba(147,197,253,0.08), rgba(255,255,255,0.015))",
                 border: "1px solid rgba(147,197,253,0.22)",
@@ -2431,19 +2450,24 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   color: "#F5F7FA", marginBottom: 16, letterSpacing: "-0.02em", lineHeight: 1.25,
                 }}>
                   Projected equity of{" "}
-                  <span style={{ color: "#93C5FD" }}>${Math.round((equitySeries[29] || 0) / 1000)}k</span>
+                  <span style={{ color: "#93C5FD" }}>{fmtMoneyShort(wealth30)}</span>
                   {" "}by year 30 — a story buyers want to hear
                 </div>
                 <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", marginBottom: 14 }}>
-                  <EquityBrick equitySeries={equitySeries} cell={9} gap={2} />
+                  <WealthGrid
+                    monthlyEquity={monthlyEquity}
+                    loanBalance={loanBalance}
+                    depositEquity={depositEquity}
+                    cell={9} gap={2}
+                  />
                 </div>
                 <div style={{
                   display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10,
                   paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)",
                 }}>
                   {[
-                    { label: "Equity year 10", value: `$${Math.round(wealth10 / 1000)}k` },
-                    { label: "Equity year 30", value: `$${Math.round((equitySeries[29] || 0) / 1000)}k` },
+                    { label: "Equity year 10", value: fmtMoneyShort(wealth10) },
+                    { label: "Equity year 30", value: fmtMoneyShort(wealth30) },
                     { label: "Growth assumption", value: `${vars.growthPct}% p.a.` },
                   ].map(s => (
                     <div key={s.label} style={{ textAlign: "center" }}>
@@ -2453,6 +2477,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   ))}
                 </div>
               </div>
+              )}
             </div>
             <AgentContactDock agent={agent} propertyName={propIn.name} />
           </>
@@ -2701,7 +2726,26 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                             borderRadius: 8, padding: "6px 10px",
                           }}>{f}</span>
                         ))}
+                        {L.heritage && (
+                          <span style={{
+                            fontSize: 11.5, color: "#FDE68A", fontWeight: 600,
+                            background: "rgba(251,191,36,0.1)",
+                            border: "1px solid rgba(251,191,36,0.28)",
+                            borderRadius: 8, padding: "6px 10px",
+                          }}>{L.heritage}</span>
+                        )}
                       </div>
+                      {L.tenancyNote && (
+                        <div style={{
+                          marginTop: 12, padding: "12px 14px", borderRadius: 10,
+                          background: "rgba(96,165,250,0.08)",
+                          border: "1px solid rgba(96,165,250,0.22)",
+                          fontSize: 12.5, color: "rgba(245,247,250,0.65)", lineHeight: 1.5,
+                        }}>
+                          <span style={{ fontWeight: 700, color: "#BFDBFE" }}>Tenancy: </span>
+                          {L.tenancyNote}
+                        </div>
+                      )}
                       {/* floorplan + inspections row */}
                       <div className="detail-listing-row" style={{
                         display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 16,
@@ -2822,18 +2866,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
           {/* hero stat strip + bricks — public listings only (agent share shows these above) */}
           {!isAgentPreview && (
           <>
+          {wealthFirst && (
+            <WealthEquationBanner weeklyCost={y1Weekly} wealth30={wealth30} growthPct={vars.growthPct} />
+          )}
           <div className="studio-strip" style={{
             display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1,
             background: "rgba(255,255,255,0.07)",
             border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: 16, overflow: "hidden", marginBottom: 22,
           }}>
-            {[
-              { label: "Costs you now", value: `$${Math.round(Math.abs(y1Weekly))}`, unit: "per week", c: "#F87171" },
-              { label: "Turns positive", value: breakEven ? `Yr ${breakEven}` : "Never", unit: breakEven ? "pays you from here" : "in 30 years", c: breakEven ? "#4ADE80" : "#F87171" },
-              { label: "Wealth by yr 10", value: `$${Math.round(wealth10 / 1000)}k`, unit: "equity + cashflow", c: wealth10 >= 0 ? "#4ADE80" : "#F87171" },
-              { label: "Owned by yr 30", value: `$${Math.round((equitySeries[29] || 0) / 1000)}k`, unit: "projected equity", c: "#93C5FD" },
-            ].map(s => (
+            {studioStripStats.map(s => (
               <div key={s.label} style={{
                 background: "#0B0D12", padding: "16px 12px", textAlign: "center",
               }}>
@@ -2853,26 +2895,69 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             ))}
           </div>
 
-          {/* THE TWO BRICKS — cashflow + equity, side by side */}
+          {/* THE TWO BRICKS — wealth-first leads with equity */}
           <div className="studio-bricks" style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14,
+            display: "grid",
+            gridTemplateColumns: wealthFirst ? "1fr" : "1fr 1fr",
+            gap: 14, marginBottom: 14,
           }}>
+            {wealthFirst && (
+              <div style={{
+                background: "linear-gradient(180deg, rgba(251,191,36,0.08), rgba(255,255,255,0.018))",
+                borderRadius: 16, border: "1px solid rgba(251,191,36,0.22)",
+                padding: "20px 18px",
+              }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
+                  Wealth — what you build over 30 years
+                </div>
+                <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
+                  360 squares · gold fills as equity grows · loan paydown below
+                </div>
+                <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                  <WealthGrid
+                    monthlyEquity={monthlyEquity}
+                    loanBalance={loanBalance}
+                    depositEquity={depositEquity}
+                    cell={9} gap={2}
+                  />
+                </div>
+                <div style={{
+                  marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)",
+                  display: "flex", alignItems: "baseline", justifyContent: "space-between",
+                }}>
+                  <div style={{ fontSize: 11.5, color: "rgba(245,247,250,0.5)" }}>
+                    On {vars.growthPct.toFixed(1)}% growth · year 30
+                  </div>
+                  <motion.div key={wealth30}
+                    initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                    style={{
+                      fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600,
+                      color: "#FBBF24",
+                    }}>
+                    ≈ {fmtMoneyShort(wealth30)}
+                  </motion.div>
+                </div>
+              </div>
+            )}
+
             {/* cashflow brick */}
             <div style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
               border: "none", padding: "20px 18px",
             }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
-                Cashflow — what it costs you
+                {wealthFirst ? "Holding cost — honest cashflow" : "Cashflow — what it costs you"}
               </div>
               <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
-                360 squares · one per month · red costs you, green pays you
+                {wealthFirst
+                  ? "Premium terraces rarely pay their way on rent — this is the cost of holding"
+                  : "360 squares · one per month · red costs you, green pays you"}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                 <CashflowGrid cashflow={cashflow} cell={9} gap={2}
                   milestones={cashflowMilestones} showLabels={true} />
               </div>
-              {/* dollar callouts UNDER the columns */}
               <div className="brick-callouts" style={{
                 display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6,
                 marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)",
@@ -2896,7 +2981,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               </div>
             </div>
 
-            {/* equity brick */}
+            {!wealthFirst && (
             <div style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
               border: "none", padding: "20px 18px",
@@ -2906,10 +2991,15 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 Equity — the wealth you build
               </div>
               <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
-                Each column a year · fills as equity grows · a projection
+                360 squares · gold fills as equity grows · loan paydown below
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", flex: 1, alignItems: "center" }}>
-                <EquityBrick equitySeries={equitySeries} cell={9} gap={2} />
+                <WealthGrid
+                  monthlyEquity={monthlyEquity}
+                  loanBalance={loanBalance}
+                  depositEquity={depositEquity}
+                  cell={9} gap={2}
+                />
               </div>
               <div style={{
                 marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)",
@@ -2918,17 +3008,18 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 <div style={{ fontSize: 11.5, color: "rgba(245,247,250,0.5)" }}>
                   On {vars.growthPct.toFixed(1)}% growth · year 30
                 </div>
-                <motion.div key={equitySeries[29]}
+                <motion.div key={wealth30}
                   initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
                   style={{
                     fontFamily: 'ui-serif, Georgia, serif', fontSize: 22, fontWeight: 600,
                     color: "#93C5FD",
                   }}>
-                  ≈ ${Math.round((equitySeries[29] || 0) / 1000)}k
+                  ≈ {fmtMoneyShort(wealth30)}
                 </motion.div>
               </div>
             </div>
+            )}
           </div>
           </>
           )}
@@ -2955,7 +3046,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 26px",
             }}>
               <StudioSlider label="Purchase price" icon={Tag} value={vars.price}
-                min={300000} max={2000000} step={10000}
+                min={sliderBounds.priceMin} max={sliderBounds.priceMax} step={10000}
                 fmt={v => `$${(v / 1000).toFixed(0)}k`} onChange={set("price")} />
               <StudioSlider label="Deposit" icon={Wallet} value={vars.deposit}
                 min={5} max={50} step={1}
@@ -2965,7 +3056,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                 fmt={v => `${v.toFixed(1)}%`} onChange={set("rate")}
                 hint="RBA cash rate 4.35% — variable, for modelling" />
               <StudioSlider label="Rent" icon={Banknote} value={vars.rentPerWeek}
-                min={200} max={2000} step={10}
+                min={sliderBounds.rentMin} max={sliderBounds.rentMax} step={25}
                 fmt={v => `$${v}/wk`} onChange={set("rentPerWeek")} />
               <StudioSlider label="Capital growth" icon={LineChart} value={vars.growthPct}
                 min={0} max={9} step={0.5}
@@ -3109,10 +3200,22 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#F5F7FA", marginBottom: 12 }}>
                 Updated 30-year view
-                {breakEven
-                  ? <span style={{ color: "#4ADE80", fontWeight: 500 }}> · pays you from year {breakEven}</span>
-                  : <span style={{ color: "#F87171", fontWeight: 500 }}> · never breaks even</span>}
+                {wealthFirst
+                  ? <span style={{ color: "#FBBF24", fontWeight: 500 }}> · builds {fmtMoneyShort(wealth30)} by year 30</span>
+                  : breakEven
+                    ? <span style={{ color: "#4ADE80", fontWeight: 500 }}> · pays you from year {breakEven}</span>
+                    : <span style={{ color: "#F87171", fontWeight: 500 }}> · never breaks even</span>}
               </div>
+              {wealthFirst && (
+                <div style={{ marginBottom: 16 }}>
+                  <WealthGrid
+                    monthlyEquity={monthlyEquity}
+                    loanBalance={loanBalance}
+                    depositEquity={depositEquity}
+                    cell={9} gap={2}
+                  />
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
                 <CashflowGrid cashflow={cashflow} cell={9} gap={2}
                   milestones={cashflowMilestones} showLabels={true} />

@@ -62,6 +62,8 @@ export const CATHERINE_PROPS = [
       floorplanUrl: "/listings/norfolk-21/floorplan.avif",
       councilRates: 2460,
       waterRates: 920,
+      heritage: "Paddington Heritage Conservation Area",
+      tenancyNote: "Contract notes subject to existing tenancies — confirm rent with agent.",
     },
     confidence: {
       growth: { score: 78, reasons: ["Heritage Paddington supply", "Five Ways lifestyle precinct", "Median +5.8% YoY"] },
