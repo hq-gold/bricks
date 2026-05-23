@@ -31,25 +31,33 @@ export function hasCompletedOnboarding() {
   }
 }
 
+// Goal IDs that have been removed from the catalogue — strip them out of
+// stored goals so legacy users don't keep seeing "Friday dinners" on their
+// 30-year brick after the catalogue was reframed around financial freedom.
+const DEPRECATED_GOAL_IDS = new Set(["bali", "dinners", "boat", "freedom", "car"]);
+
 export function loadStoredGoals() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    // Dedupe by emoji+name+amount+type so legacy storage from earlier sessions
-    // (where we mixed SEED_GOALS ids with catalogue ids) can't show the same
-    // goal twice on the brick.
+    const validBaseIds = new Set(GOAL_CATALOGUE.map(g => g.id));
     const seen = new Set();
-    const deduped = [];
+    const cleaned = [];
     for (const g of parsed) {
       if (!g || !g.emoji) continue;
+      const baseId = (g.id || "").replace(/^g_/, "");
+      if (DEPRECATED_GOAL_IDS.has(baseId)) continue;
+      // If we have a stored id but it's not in the current catalogue and not
+      // explicitly deprecated, still keep it (custom user goals).
+      if (baseId && !validBaseIds.has(baseId) && !g.custom) continue;
       const k = `${g.emoji}|${g.name}|${g.amount}|${g.type}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      deduped.push(g);
+      cleaned.push(g);
     }
-    return deduped.length ? deduped : null;
+    return cleaned.length ? cleaned : null;
   } catch {
     return null;
   }

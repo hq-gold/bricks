@@ -30,11 +30,11 @@ import { computeWealthProjection, fmtMoneyShort } from "../core/wealthProjection
 // We keep cells big (18px) because this brick is the page's hero.
 // horizonYear (optional 1–30) draws a vertical "your exit" line so people
 // who plan to hold for 10 or 20 years see exactly where their story ends.
-function GoalsBrick({ cashflow, achievements, breakEven, horizonYear }) {
+function GoalsBrick({ cashflow, achievements, breakEven, horizonYear, cell = 18, gap = 3 }) {
   const COLS = 30;
   const ROWS = 12;
-  const CELL = 18;
-  const GAP = 3;
+  const CELL = cell;
+  const GAP = gap;
   const gridWidth = COLS * CELL + (COLS - 1) * GAP;
 
   // Group achievements by yearHit so we can stack emojis when multiple goals
@@ -98,7 +98,8 @@ function GoalsBrick({ cashflow, achievements, breakEven, horizonYear }) {
                     transition={{ delay: 0.4 + year * 0.025 + i * 0.05, duration: 0.45,
                       ease: [0.22, 1, 0.36, 1] }}
                     style={{
-                      fontSize: 18, lineHeight: 1,
+                      fontSize: Math.max(14, CELL),
+                      lineHeight: 1,
                       filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.55))",
                     }}>
                     {a.emoji}
@@ -731,62 +732,75 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
             </div>
           ) : (
             <>
-              {/* Cashflow brick — goals as emojis */}
-              <div style={{
-                fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
-                color: "#FB7185", marginBottom: 4,
-              }}>30-year cashflow · what pays for your life</div>
-              <div style={{
-                display: "flex", justifyContent: "center",
-                padding: "12px 4px 60px",
-                overflowX: "auto",
+              {/* Cashflow + Wealth — side by side, the two stories every buyer wants */}
+              <div className="goals-bricks-grid" style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 18, marginBottom: 24,
               }}>
-                <GoalsBrick
-                  cashflow={cashflow}
-                  achievements={achievements}
-                  breakEven={breakEvenYear}
-                  horizonYear={horizonYears} />
-              </div>
-
-              {/* Wealth brick — equity built alongside the cashflow story */}
-              {wealthProjection && (
+                {/* Cashflow brick — goals as emojis */}
                 <div style={{
-                  marginTop: -36, marginBottom: 24,
-                  background: "linear-gradient(180deg, rgba(251,191,36,0.06), rgba(255,255,255,0.012))",
-                  border: "1px solid rgba(251,191,36,0.18)",
-                  borderRadius: 18, padding: "20px 22px",
+                  background: "linear-gradient(180deg, rgba(251,113,133,0.06), rgba(255,255,255,0.012))",
+                  border: "1px solid rgba(251,113,133,0.18)",
+                  borderRadius: 18, padding: "20px 18px",
                 }}>
                   <div style={{
-                    display: "flex", flexWrap: "wrap", alignItems: "baseline",
-                    justifyContent: "space-between", gap: 10, marginBottom: 14,
+                    fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
+                    color: "#FB7185", marginBottom: 4,
+                  }}>30-year cashflow · what pays for your life</div>
+                  <div style={{
+                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 17, fontWeight: 500,
+                    color: "#F5F7FA", letterSpacing: "-0.01em", marginBottom: 14, lineHeight: 1.25,
                   }}>
-                    <div>
-                      <div style={{
-                        fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
-                        color: "#FBBF24", marginBottom: 4,
-                      }}>30-year wealth · what you'll be worth</div>
-                      <div style={{
-                        fontFamily: 'ui-serif, Georgia, serif', fontSize: 18, fontWeight: 500,
-                        color: "#F5F7FA", letterSpacing: "-0.01em",
-                      }}>
-                        Equity grows from your deposit to{" "}
-                        <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(equitySeries[29] || 0)}</span>
-                        {" "}by year 30
-                      </div>
-                    </div>
+                    {breakEvenYear
+                      ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEvenYear}</span></>
+                      : <>Costs every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
                   </div>
-                  <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
-                    <WealthGrid
-                      monthlyEquity={wealthProjection.monthlyEquity}
-                      loanBalance={wealthProjection.loanBalance}
-                      depositEquity={wealthProjection.depositEquity}
-                      cell={9} gap={2}
-                      showLoanStrip={false}
-                      showYearCallouts
-                    />
+                  <div style={{
+                    display: "flex", justifyContent: "center",
+                    paddingBottom: 60, overflowX: "auto",
+                  }}>
+                    <GoalsBrick
+                      cashflow={cashflow}
+                      achievements={achievements}
+                      breakEven={breakEvenYear}
+                      horizonYear={horizonYears}
+                      cell={13} gap={2} />
                   </div>
                 </div>
-              )}
+
+                {/* Wealth brick — gold heatmap */}
+                {wealthProjection && (
+                  <div style={{
+                    background: "linear-gradient(180deg, rgba(251,191,36,0.06), rgba(255,255,255,0.012))",
+                    border: "1px solid rgba(251,191,36,0.18)",
+                    borderRadius: 18, padding: "20px 18px",
+                  }}>
+                    <div style={{
+                      fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
+                      color: "#FBBF24", marginBottom: 4,
+                    }}>30-year wealth · what you'll be worth</div>
+                    <div style={{
+                      fontFamily: 'ui-serif, Georgia, serif', fontSize: 17, fontWeight: 500,
+                      color: "#F5F7FA", letterSpacing: "-0.01em", marginBottom: 14, lineHeight: 1.25,
+                    }}>
+                      Equity grows to{" "}
+                      <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(equitySeries[29] || 0)}</span>
+                      {" "}by year 30
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                      <WealthGrid
+                        monthlyEquity={wealthProjection.monthlyEquity}
+                        loanBalance={wealthProjection.loanBalance}
+                        depositEquity={wealthProjection.depositEquity}
+                        cell={11} gap={2}
+                        showLoanStrip={false}
+                        showYearCallouts
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Equity + wealth at horizon — answers "what am I worth at
                   the end of my hold?" without leaving the goals page. */}
@@ -917,6 +931,10 @@ export default function GoalsScreen({ properties, goals, onChangeGoals, onOpen, 
       <style>{`
         .goals-coverage { grid-template-columns: 1fr 1fr; }
         .goals-wealth-strip { grid-template-columns: repeat(3, 1fr); }
+        .goals-bricks-grid { grid-template-columns: 1fr 1fr; }
+        @media (max-width: 980px) {
+          .goals-bricks-grid { grid-template-columns: 1fr; }
+        }
         @media (max-width: 720px) {
           .goals-coverage { grid-template-columns: 1fr; }
           .goals-wealth-strip { grid-template-columns: 1fr; }

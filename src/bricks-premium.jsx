@@ -2741,11 +2741,11 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
           }}>
             <div>
               <div style={{
-                fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
-                color: "#FB7185", fontWeight: 600, marginBottom: 5,
+                fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase",
+                color: "#FB7185", fontWeight: 600, marginBottom: 6,
               }}>{isAgentPreview ? "Your assumptions" : "Scenario Studio"}</div>
               <div style={{
-                fontFamily: 'ui-serif, Georgia, serif', fontSize: 26, fontWeight: 500,
+                fontFamily: 'ui-serif, Georgia, serif', fontSize: 32, fontWeight: 500,
                 color: "#F5F7FA", letterSpacing: "-0.02em", lineHeight: 1.1,
               }}>{isAgentPreview ? "Adjust the model to your situation" : "Play out the next 30 years"}</div>
             </div>
@@ -2778,20 +2778,20 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
               { label: "Owned by yr 30", value: `$${Math.round(wealth30 / 1000)}k`, unit: "projected equity", c: "#93C5FD" },
             ].map(s => (
               <div key={s.label} style={{
-                background: "#0B0D12", padding: "16px 12px", textAlign: "center",
+                background: "#0B0D12", padding: "20px 14px", textAlign: "center",
               }}>
                 <div style={{
-                  fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase",
-                  color: "rgba(245,247,250,0.42)", fontWeight: 600, marginBottom: 7,
+                  fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase",
+                  color: "rgba(245,247,250,0.45)", fontWeight: 600, marginBottom: 8,
                 }}>{s.label}</div>
                 <motion.div key={s.value}
                   initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.25 }}
                   style={{
-                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 26, fontWeight: 600,
+                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 32, fontWeight: 600,
                     color: s.c, lineHeight: 1, letterSpacing: "-0.02em",
                   }}>{s.value}</motion.div>
-                <div style={{ fontSize: 10, color: "rgba(245,247,250,0.45)", marginTop: 5 }}>{s.unit}</div>
+                <div style={{ fontSize: 11, color: "rgba(245,247,250,0.5)", marginTop: 6 }}>{s.unit}</div>
               </div>
             ))}
           </div>
@@ -2803,16 +2803,16 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             {/* cashflow brick */}
             <div style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
-              border: "none", padding: "20px 18px",
+              border: "none", padding: "22px 20px",
             }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#F5F7FA", marginBottom: 4 }}>
                 Cashflow — what it costs you
               </div>
-              <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
-                360 squares · <strong style={{ color: "rgba(245,247,250,0.7)" }}>after-tax at {vars.marginalRate}% bracket</strong> · {vars.build === "new" ? "negative gearing applied (new build)" : "no NG post-2027 (established)"}
+              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", marginBottom: 20, lineHeight: 1.5 }}>
+                360 squares · <strong style={{ color: "rgba(245,247,250,0.75)" }}>after-tax at {vars.marginalRate}% bracket</strong> · {vars.build === "new" ? "negative gearing applied (new build)" : "no NG post-2027 (established)"}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
-                <CashflowGrid cashflow={cashflow} cell={9} gap={2}
+                <CashflowGrid cashflow={cashflow} cell={11} gap={2.5}
                   milestones={cashflowMilestones} showLabels={true} />
               </div>
               <div className="brick-callouts" style={{
@@ -2841,13 +2841,13 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
             {/* equity brick */}
             <div style={{
               background: "rgba(255,255,255,0.018)", borderRadius: 16,
-              border: "none", padding: "20px 18px",
+              border: "none", padding: "22px 20px",
               display: "flex", flexDirection: "column",
             }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#F5F7FA", marginBottom: 3 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#F5F7FA", marginBottom: 4 }}>
                 Equity — the wealth you build
               </div>
-              <div style={{ fontSize: 11, color: "rgba(245,247,250,0.42)", marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: "rgba(245,247,250,0.5)", marginBottom: 20, lineHeight: 1.5 }}>
                 360 squares · gold fills as equity grows {vars.loanType === "pi" ? "· loan paydown below" : ""}
               </div>
               <div style={{ display: "flex", justifyContent: "center", overflowX: "auto", flex: 1, alignItems: "center" }}>
@@ -2855,7 +2855,7 @@ function ConsideringDetail({ property: propIn, goals, onBack, onOpen, onOpenBudg
                   monthlyEquity={monthlyEquity}
                   loanBalance={loanBalance}
                   depositEquity={depositEquity}
-                  cell={9} gap={2}
+                  cell={11} gap={2.5}
                   showLoanStrip
                   showYearCallouts
                 />
