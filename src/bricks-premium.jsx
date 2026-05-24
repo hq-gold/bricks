@@ -4846,6 +4846,7 @@ function AppInner() {
               <GoalsScreen
                 key="goals"
                 properties={properties}
+                wishlist={wishlist}
                 goals={goals}
                 onChangeGoals={setGoals}
                 onOpen={handleOpen}

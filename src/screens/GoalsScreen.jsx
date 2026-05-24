@@ -309,18 +309,30 @@ function GoalsEditor({ goals, onChange }) {
   );
 }
 
-// Pick which property to visualise the goals against. Three quick suggestions
-// + a select dropdown for the rest.
-function PropertyPicker({ properties, selectedId, onSelect }) {
-  // Prefer the top three by earliest break-even (most likely to cover goals)
-  const topPicks = useMemo(() => {
+// Pick which property to visualise the goals against.
+// Wishlist-first: the user's shortlist appears as quick-pick chips before
+// anything else (those are the ones they're emotionally invested in). If
+// the shortlist is empty we fall back to the three with the earliest
+// break-even (most likely to make the goal-marker viz feel like magic),
+// and a dropdown of the rest is always available as the final escape hatch.
+function PropertyPicker({ properties, wishlist, selectedId, onSelect }) {
+  const wishlistIds = useMemo(() => {
+    const set = wishlist instanceof Set ? wishlist : new Set(wishlist || []);
+    return set;
+  }, [wishlist]);
+
+  const { quickPicks, source } = useMemo(() => {
+    const shortlisted = properties.filter(p => wishlistIds.has(p.id));
+    if (shortlisted.length > 0) {
+      return { quickPicks: shortlisted.slice(0, 5), source: "shortlist" };
+    }
     const scored = properties.map(p => ({
       p,
       breakEven: yearTurnsPositive(generateCashflow(p)) ?? 999,
     }));
     scored.sort((a, b) => a.breakEven - b.breakEven);
-    return scored.slice(0, 3).map(s => s.p);
-  }, [properties]);
+    return { quickPicks: scored.slice(0, 3).map(s => s.p), source: "fastest" };
+  }, [properties, wishlistIds]);
 
   return (
     <div className="goals-picker" style={{
@@ -328,9 +340,10 @@ function PropertyPicker({ properties, selectedId, onSelect }) {
     }}>
       <span style={{
         fontSize: 11.5, letterSpacing: 0.18, textTransform: "uppercase",
-        color: "rgba(245,247,250,0.55)", fontWeight: 700, marginRight: 4,
-      }}>See against</span>
-      {topPicks.map(p => {
+        color: source === "shortlist" ? "#FECDD3" : "rgba(245,247,250,0.55)",
+        fontWeight: 700, marginRight: 4,
+      }}>{source === "shortlist" ? "Your shortlist" : "Fastest break-even"}</span>
+      {quickPicks.map(p => {
         const selected = p.id === selectedId;
         const label = (p.suburb || "").split(",")[0].trim();
         return (
@@ -354,10 +367,10 @@ function PropertyPicker({ properties, selectedId, onSelect }) {
         );
       })}
       <select
-        value={topPicks.find(p => p.id === selectedId) ? "" : (selectedId || "")}
+        value={quickPicks.find(p => p.id === selectedId) ? "" : (selectedId || "")}
         onChange={e => {
           const v = e.target.value;
-          if (v === "") return; // ignore the placeholder option
+          if (v === "") return;
           onSelect(Number(v));
         }}
         style={{
@@ -371,13 +384,113 @@ function PropertyPicker({ properties, selectedId, onSelect }) {
         }}>
         <option value="" style={{ background: "#0A0D12" }}>or pick another property…</option>
         {properties
-          .filter(p => !topPicks.find(tp => tp.id === p.id))
+          .filter(p => !quickPicks.find(tp => tp.id === p.id))
           .map(p => (
             <option key={p.id} value={p.id} style={{ background: "#0A0D12" }}>
               {(p.suburb || "").split(",")[0].trim()} · ${(p.price / 1000).toFixed(0)}k
             </option>
           ))}
       </select>
+    </div>
+  );
+}
+
+/**
+ * Compact assumptions panel — lets the user tune the inputs that drive both
+ * the cashflow brick AND the wealth grid on this page. We keep this minimal
+ * (deposit / rate / growth / build / loan type) because the Scenario Studio
+ * on the drill-down is the place for the full lever set; here we want the
+ * page to FEEL editable without competing with the deeper screen.
+ */
+function GoalsInputs({ inputs, onChange }) {
+  const set = (k) => (v) => onChange({ ...inputs, [k]: v });
+  const row = {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    gap: 10, padding: "10px 12px",
+    background: "rgba(255,255,255,0.025)",
+    border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 10,
+  };
+  const label = {
+    fontSize: 11, letterSpacing: 0.16, textTransform: "uppercase",
+    color: "rgba(245,247,250,0.55)", fontWeight: 700,
+  };
+  const numInput = {
+    width: 64, background: "transparent", border: "none", outline: "none",
+    color: "#F5F7FA", fontSize: 14, fontWeight: 700,
+    fontVariantNumeric: "tabular-nums", textAlign: "right",
+    padding: 0, fontFamily: "inherit",
+  };
+  const Toggle = ({ value, onSet, options }) => (
+    <div style={{
+      display: "inline-flex", padding: 2, gap: 0,
+      background: "rgba(0,0,0,0.25)",
+      border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 999,
+    }}>
+      {options.map(o => {
+        const on = o.id === value;
+        return (
+          <button key={o.id} onClick={() => onSet(o.id)}
+            style={{
+              cursor: "pointer", border: "none",
+              borderRadius: 999, padding: "5px 10px",
+              fontSize: 11, fontWeight: 700, letterSpacing: -0.01,
+              background: on ? "rgba(251,113,133,0.20)" : "transparent",
+              color: on ? "#FECDD3" : "rgba(245,247,250,0.55)",
+            }}>{o.label}</button>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="goals-inputs-grid" style={{
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+      gap: 8, marginBottom: 18,
+    }}>
+      <div style={row}>
+        <span style={label}>Deposit</span>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
+          <input type="number" min={5} max={60} step={1} value={inputs.depositPct}
+            onChange={e => set("depositPct")(Math.min(60, Math.max(5, Number(e.target.value) || 0)))}
+            style={numInput} />
+          <span style={{ color: "rgba(245,247,250,0.5)", fontSize: 12, fontWeight: 700 }}>%</span>
+        </span>
+      </div>
+      <div style={row}>
+        <span style={label}>Rate</span>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
+          <input type="number" min={3} max={12} step={0.05} value={inputs.ratePct}
+            onChange={e => set("ratePct")(Math.min(12, Math.max(3, Number(e.target.value) || 0)))}
+            style={numInput} />
+          <span style={{ color: "rgba(245,247,250,0.5)", fontSize: 12, fontWeight: 700 }}>%</span>
+        </span>
+      </div>
+      <div style={row}>
+        <span style={label}>Growth</span>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
+          <input type="number" min={0} max={12} step={0.25} value={inputs.growthPct}
+            onChange={e => set("growthPct")(Math.min(12, Math.max(0, Number(e.target.value) || 0)))}
+            style={numInput} />
+          <span style={{ color: "rgba(245,247,250,0.5)", fontSize: 12, fontWeight: 700 }}>%</span>
+        </span>
+      </div>
+      <div style={row}>
+        <span style={label}>Build</span>
+        <Toggle value={inputs.build} onSet={set("build")}
+          options={[
+            { id: "new", label: "New" },
+            { id: "existing", label: "Existing" },
+          ]} />
+      </div>
+      <div style={row}>
+        <span style={label}>Loan</span>
+        <Toggle value={inputs.loanType} onSet={set("loanType")}
+          options={[
+            { id: "io", label: "IO" },
+            { id: "pi", label: "P&I" },
+          ]} />
+      </div>
     </div>
   );
 }
@@ -408,40 +521,70 @@ function WealthTile({ label, value, sub, accent, bg, border }) {
 }
 
 // Build a vars shape for computeWealthProjection from a property + assumptions.
-function buildWealthVars(property, marginalRate) {
+function buildWealthVars(property, marginalRate, inputs) {
   const price = property?.price || 0;
   return {
     price,
-    deposit: 20,
-    rate: (MODEL_DEFAULTS.rate ?? 0.0639) * 100,
-    growthPct: property?.growthPct || 5,
+    deposit: inputs.depositPct,
+    rate: inputs.ratePct,
+    growthPct: inputs.growthPct,
     marginalRate,
-    build: property?.build || "existing",
+    build: inputs.build,
     state: property?.state || "NSW",
-    loanType: "io",
+    loanType: inputs.loanType,
     rentPerWeek: Math.round(((property?.price || 0) * ((property?.yieldPct || 4) / 100)) / 52),
     rentGrowth: 3,
     pporYears: 0,
   };
 }
 
+// Initial inputs derived from a property — the user can override any of these
+// via GoalsInputs, and clicking Reset restores them to the property's own
+// defaults again.
+function defaultInputsFor(property) {
+  return {
+    depositPct: 20,
+    ratePct: (MODEL_DEFAULTS.rate ?? 0.0639) * 100,
+    growthPct: property?.growthPct ?? 5,
+    build: property?.build || "existing",
+    loanType: "io",
+  };
+}
+
 export default function GoalsScreen({
-  properties, goals, onChangeGoals, onOpen, onTab,
+  properties, wishlist, goals, onChangeGoals, onOpen, onTab,
   // Bracket is hoisted to AppInner so it stays consistent with Browse + Settings.
   // We mirror it locally for instant feedback and bubble changes back up.
   initialBracket = 39, onBracketChange,
 }) {
-  // Default to whichever property has the earliest break-even — the one most likely
-  // to make the goal-marker viz feel like magic.
+  // Default property — the user's shortlist takes priority over a "smart" pick:
+  // they've actively saved these, so they're the ones the goal-marker viz
+  // should land on first. Only fall back to fastest-break-even when the
+  // shortlist is empty.
+  const wishlistSet = useMemo(
+    () => wishlist instanceof Set ? wishlist : new Set(wishlist || []),
+    [wishlist],
+  );
   const defaultPropertyId = useMemo(() => {
     if (!properties?.length) return null;
+    const shortlisted = properties.filter(p => wishlistSet.has(p.id));
+    if (shortlisted.length > 0) {
+      // Within the shortlist, still prefer the earliest break-even so the
+      // first impression is "your favourite covers your goals fast".
+      const scored = shortlisted.map(p => ({
+        id: p.id,
+        breakEven: yearTurnsPositive(generateCashflow(p)) ?? 999,
+      }));
+      scored.sort((a, b) => a.breakEven - b.breakEven);
+      return scored[0].id;
+    }
     const scored = properties.map(p => ({
       id: p.id,
       breakEven: yearTurnsPositive(generateCashflow(p)) ?? 999,
     }));
     scored.sort((a, b) => a.breakEven - b.breakEven);
     return scored[0].id;
-  }, [properties]);
+  }, [properties, wishlistSet]);
   const [selectedId, setSelectedId] = useState(defaultPropertyId);
   const [horizonYears, setHorizonYears] = useState(30);
   const [marginalRate, setMarginalRate] = useState(initialBracket);
@@ -458,6 +601,24 @@ export default function GoalsScreen({
   }, [properties, defaultPropertyId, selectedId]);
   const selectedProperty = properties.find(p => p.id === selectedId) || properties[0];
 
+  // Editable assumptions — initialised from the property and reset back to
+  // the property's defaults whenever the user picks a different home (so we
+  // don't carry "I dragged growth to 9%" assumptions across listings).
+  const [inputs, setInputs] = useState(() => defaultInputsFor(selectedProperty));
+  const [inputsTouched, setInputsTouched] = useState(false);
+  useEffect(() => {
+    setInputs(defaultInputsFor(selectedProperty));
+    setInputsTouched(false);
+  }, [selectedId, selectedProperty]);
+  const handleInputs = useCallback((next) => {
+    setInputs(next);
+    setInputsTouched(true);
+  }, []);
+  const resetInputs = useCallback(() => {
+    setInputs(defaultInputsFor(selectedProperty));
+    setInputsTouched(false);
+  }, [selectedProperty]);
+
   // Persist any goals change immediately
   const handleGoalsChange = useCallback((next) => {
     saveGoals(next);
@@ -465,12 +626,20 @@ export default function GoalsScreen({
   }, [onChangeGoals]);
 
   // Compute cashflow + goal achievements for the chosen property at the
-  // user's chosen tax bracket — so what they see on the brick is what they'd
-  // actually take home (negative gearing applied at THEIR marginal rate).
+  // user's chosen tax bracket AND tuned inputs — so what they see on the
+  // brick is what they'd actually take home given their assumptions.
   const cashflowConfig = useMemo(() => {
     if (!selectedProperty) return null;
-    return { ...selectedProperty, marginalRate: marginalRate / 100 };
-  }, [selectedProperty, marginalRate]);
+    return {
+      ...selectedProperty,
+      marginalRate: marginalRate / 100,
+      deposit: inputs.depositPct / 100,
+      rate: inputs.ratePct / 100,
+      growthPct: inputs.growthPct,
+      build: inputs.build,
+      loanType: inputs.loanType,
+    };
+  }, [selectedProperty, marginalRate, inputs]);
   const cashflow = useMemo(
     () => cashflowConfig ? generateCashflow(cashflowConfig) : new Array(360).fill(0),
     [cashflowConfig]
@@ -485,8 +654,8 @@ export default function GoalsScreen({
 
   // Wealth projection — monthly equity + loan balance for the WealthGrid.
   const wealthVars = useMemo(
-    () => selectedProperty ? buildWealthVars(selectedProperty, marginalRate) : null,
-    [selectedProperty, marginalRate],
+    () => selectedProperty ? buildWealthVars(selectedProperty, marginalRate, inputs) : null,
+    [selectedProperty, marginalRate, inputs],
   );
   const wealthProjection = useMemo(
     () => (wealthVars ? computeWealthProjection(wealthVars, cashflow) : null),
@@ -498,7 +667,6 @@ export default function GoalsScreen({
     const months = horizonYears * 12;
     return cashflow.slice(0, months).reduce((s, x) => s + x, 0);
   }, [cashflow, horizonYears]);
-  const totalWealth = equityAtHorizon + Math.max(0, lifetimeNetInHorizon);
 
   const noGoals = !goals || goals.length === 0;
 
@@ -638,9 +806,39 @@ export default function GoalsScreen({
             </div>
             <PropertyPicker
               properties={properties}
+              wishlist={wishlistSet}
               selectedId={selectedId}
               onSelect={setSelectedId} />
           </div>
+
+          {/* Tunable assumptions — same five levers the drill-down has, just
+              in a compact strip so the page stays calm. Changes immediately
+              re-shape the cashflow brick + wealth grid below. */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 12, marginBottom: 8,
+          }}>
+            <div style={{
+              fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+              color: "rgba(245,247,250,0.55)", fontWeight: 700,
+            }}>Your assumptions</div>
+            {inputsTouched && (
+              <button onClick={resetInputs}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  cursor: "pointer",
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 999, padding: "5px 10px",
+                  color: "rgba(245,247,250,0.6)",
+                  fontSize: 11, fontWeight: 600,
+                }}>
+                <RefreshCw size={10} strokeWidth={2.2} />
+                Reset to property defaults
+              </button>
+            )}
+          </div>
+          <GoalsInputs inputs={inputs} onChange={handleInputs} />
 
           {/* Horizon switch + tax bracket — shape the brick honestly to YOUR
               numbers. Tax bracket SCALES negative-gearing refunds (a higher
@@ -821,36 +1019,34 @@ export default function GoalsScreen({
                 )}
               </div>
 
-              {/* Equity + wealth at horizon — answers "what am I worth at
-                  the end of my hold?" without leaving the goals page. */}
+              {/* Two distinct numbers — what you OWN (equity) and what it
+                  COST or PAID YOU along the way (lifetime cashflow). We used
+                  to show a third "Total wealth = equity + cashflow" tile, but
+                  that's just the sum of these two and made the strip feel
+                  noisy. The two figures together answer the only two
+                  questions that matter at exit. */}
               <div className="goals-wealth-strip" style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
+                gridTemplateColumns: "repeat(2, 1fr)",
                 gap: 12, marginBottom: 4,
               }}>
                 <WealthTile
                   label={`Equity at year ${horizonYears}`}
                   value={fmt(equityAtHorizon)}
-                  sub="What you'd walk away with"
+                  sub="What you'd walk away with (value − loan)"
                   accent="#FBBF24"
                   bg="rgba(251,191,36,0.06)"
                   border="rgba(251,191,36,0.20)"
                 />
                 <WealthTile
-                  label={`Cashflow ${horizonYears}yr`}
+                  label={`Cashflow over ${horizonYears} years`}
                   value={fmt(lifetimeNetInHorizon)}
-                  sub={lifetimeNetInHorizon >= 0 ? "Net into your pocket (after-tax)" : "Total bleed before exit (after-tax)"}
+                  sub={lifetimeNetInHorizon >= 0
+                    ? "After-tax cash this property put in your pocket"
+                    : "After-tax cash this property cost you to hold"}
                   accent={lifetimeNetInHorizon >= 0 ? "#86EFAC" : "#FCA5A5"}
                   bg={lifetimeNetInHorizon >= 0 ? "rgba(34,197,94,0.06)" : "rgba(244,63,94,0.06)"}
                   border={lifetimeNetInHorizon >= 0 ? "rgba(34,197,94,0.20)" : "rgba(244,63,94,0.20)"}
-                />
-                <WealthTile
-                  label="Total wealth"
-                  value={fmt(totalWealth)}
-                  sub="Equity + net cashflow"
-                  accent="#FCD34D"
-                  bg="rgba(252,211,77,0.06)"
-                  border="rgba(252,211,77,0.22)"
                 />
               </div>
 
@@ -949,16 +1145,19 @@ export default function GoalsScreen({
 
       <style>{`
         .goals-coverage { grid-template-columns: 1fr 1fr; }
-        .goals-wealth-strip { grid-template-columns: repeat(3, 1fr); }
+        .goals-wealth-strip { grid-template-columns: repeat(2, 1fr); }
         .goals-bricks-grid { grid-template-columns: 1fr 1fr; }
+        .goals-inputs-grid { grid-template-columns: repeat(5, 1fr); }
         @media (max-width: 980px) {
           .goals-bricks-grid { grid-template-columns: 1fr; }
+          .goals-inputs-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 720px) {
           .goals-coverage { grid-template-columns: 1fr; }
           .goals-wealth-strip { grid-template-columns: 1fr; }
           .goals-picker { width: 100%; }
           .goals-horizon-row { width: 100%; }
+          .goals-inputs-grid { grid-template-columns: 1fr 1fr; }
         }
       `}</style>
     </motion.div>

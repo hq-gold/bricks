@@ -15,12 +15,9 @@ export const GOAL_CATALOGUE = [
   { id: "mortgage", emoji: "🏠", name: "Pay off our home loan", defaultAmount: 35000, type: "yearly", hint: "/ year" },
   { id: "salary", emoji: "💼", name: "Replace my salary", defaultAmount: 120000, type: "yearly", hint: "/ year passive" },
   { id: "retire", emoji: "👴", name: "Retire by 60", defaultAmount: 90000, type: "yearly", hint: "/ year passive" },
-  { id: "fire", emoji: "🆓", name: "Full financial freedom", defaultAmount: 150000, type: "yearly", hint: "/ year passive" },
-  { id: "school", emoji: "🎓", name: "Private school + uni", defaultAmount: 35000, type: "yearly", hint: "/ year" },
   { id: "kids", emoji: "👶", name: "Help the kids buy a home", defaultAmount: 150000, type: "cumulative", hint: "one-off" },
   { id: "second", emoji: "🏖️", name: "A holiday house", defaultAmount: 700000, type: "cumulative", hint: "one-off" },
   { id: "legacy", emoji: "🌳", name: "Generational wealth", defaultAmount: 2000000, type: "cumulative", hint: "leave behind" },
-  { id: "yearoff", emoji: "⏸️", name: "Take a year off work", defaultAmount: 120000, type: "cumulative", hint: "one-off" },
 ];
 
 export function hasCompletedOnboarding() {
@@ -34,7 +31,12 @@ export function hasCompletedOnboarding() {
 // Goal IDs that have been removed from the catalogue — strip them out of
 // stored goals so legacy users don't keep seeing "Friday dinners" on their
 // 30-year brick after the catalogue was reframed around financial freedom.
-const DEPRECATED_GOAL_IDS = new Set(["bali", "dinners", "boat", "freedom", "car"]);
+const DEPRECATED_GOAL_IDS = new Set([
+  "bali", "dinners", "boat", "freedom", "car",
+  // Pruned in the May 2026 simplification — fewer/clearer goals reduce
+  // visual clutter on the Goals page without losing universal relevance.
+  "fire", "school", "yearoff",
+]);
 
 export function loadStoredGoals() {
   try {
