@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Sparkles, ArrowRight, Target, Edit3, RefreshCw } from "lucide-react";
+import { Plus, Trash2, Sparkles, ArrowRight, Target, Edit3, RefreshCw, ChevronDown } from "lucide-react";
 import {
   GOAL_CATALOGUE,
   saveGoals,
@@ -670,19 +670,31 @@ export default function GoalsScreen({
 
   const noGoals = !goals || goals.length === 0;
 
+  // Mobile-only ergonomics: with both charts stacked the hero feel is lost,
+  // so on mobile we collapse to a single chart at a time via a tab. On
+  // desktop both charts are visible side-by-side and this state is ignored
+  // (CSS handles the toggling). We also keep the deeper "tune assumptions"
+  // panel folded by default on mobile so the chart and the two most-tapped
+  // controls (horizon + tax bracket) are the only thing on screen.
+  const [mobileChart, setMobileChart] = useState("cashflow");
+  const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+
   return (
     <motion.div
+      className="goals-page"
       initial={{ opacity: 0 }} animate={{ opacity: 1 }}
       transition={{ duration: 0.32 }}
       style={{
         maxWidth: 1240, margin: "0 auto",
         padding: "16px 28px 80px",
+        display: "flex", flexDirection: "column",
       }}>
       {/* ── Hero ────────────────────────────────────────────────────── */}
-      <div style={{
+      <div className="goals-hero" style={{
         position: "relative",
         marginBottom: 32,
         paddingTop: 20,
+        order: 1,
       }}>
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 7,
@@ -696,10 +708,10 @@ export default function GoalsScreen({
           <Target size={11} strokeWidth={2.4} color="#FB7185" />
           Your goals
         </div>
-        <h1 style={{
+        <h1 className="goals-hero-h1" style={{
           margin: "0 0 12px",
           fontFamily: 'ui-serif, Georgia, "Times New Roman", serif',
-          fontSize: "clamp(34px, 4.5vw, 52px)",
+          fontSize: "clamp(28px, 4.5vw, 52px)",
           fontWeight: 500, letterSpacing: "-0.03em", lineHeight: 1.05,
           color: "#F5F7FA",
         }}>
@@ -711,7 +723,7 @@ export default function GoalsScreen({
             WebkitTextFillColor: "transparent", color: "transparent",
           }}>actually paying for</span>?
         </h1>
-        <p style={{
+        <p className="goals-hero-p" style={{
           margin: 0, maxWidth: 660,
           fontSize: 17, lineHeight: 1.55,
           color: "rgba(245,247,250,0.7)",
@@ -721,12 +733,16 @@ export default function GoalsScreen({
         </p>
       </div>
 
-      {/* ── Goals editor ───────────────────────────────────────────── */}
-      <section style={{
+      {/* ── Goals editor ───────────────────────────────────────────────
+          On mobile this drops BELOW the visualisation (CSS order: 3) so the
+          beautiful squares stay the hero. On desktop it sits in its natural
+          reading order above (CSS order: 2). */}
+      <section className="goals-editor-section" style={{
         background: "rgba(255,255,255,0.025)",
         border: "1px solid rgba(255,255,255,0.07)",
         borderRadius: 20, padding: "26px 26px 24px",
         marginBottom: 28,
+        order: 2,
       }}>
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -770,13 +786,21 @@ export default function GoalsScreen({
         </p>
       </section>
 
-      {/* ── The visualisation ───────────────────────────────────────── */}
+      {/* ── The visualisation ───────────────────────────────────────────
+          The visualisation is itself a flex column whose children use CSS
+          `order` so that on mobile the squares (charts) bubble to the top
+          right under the picker, the most-tapped controls (horizon + tax
+          bracket) sit directly underneath, and the deeper assumptions
+          panel falls back behind a "Tune" toggle. On desktop the natural
+          reading order is preserved. */}
       {selectedProperty && (
-        <section style={{
+        <section className="goals-viz-section" style={{
           background: "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%)",
           border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 24, padding: "32px 30px 36px",
           position: "relative", overflow: "hidden",
+          display: "flex", flexDirection: "column",
+          order: 3,
         }}>
           <div aria-hidden style={{
             position: "absolute", top: -120, right: -100,
@@ -785,16 +809,18 @@ export default function GoalsScreen({
             filter: "blur(60px)", pointerEvents: "none",
           }} />
 
-          <div style={{
+          {/* viz-header — H2 + property picker (always first) */}
+          <div className="viz-header" style={{
             display: "flex", flexWrap: "wrap", justifyContent: "space-between",
             alignItems: "flex-end", gap: 16, marginBottom: 22,
+            order: 1,
           }}>
             <div>
               <div style={{
                 fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
                 color: "rgba(245,247,250,0.5)", fontWeight: 700, marginBottom: 4,
               }}>Step 2 · Watch them land</div>
-              <h2 style={{
+              <h2 className="viz-h2" style={{
                 margin: 0,
                 fontFamily: 'ui-serif, Georgia, serif',
                 fontSize: 26, fontWeight: 500, color: "#F5F7FA",
@@ -811,133 +837,21 @@ export default function GoalsScreen({
               onSelect={setSelectedId} />
           </div>
 
-          {/* Tunable assumptions — same five levers the drill-down has, just
-              in a compact strip so the page stays calm. Changes immediately
-              re-shape the cashflow brick + wealth grid below. */}
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: 12, marginBottom: 8,
-          }}>
-            <div style={{
-              fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
-              color: "rgba(245,247,250,0.55)", fontWeight: 700,
-            }}>Your assumptions</div>
-            {inputsTouched && (
-              <button onClick={resetInputs}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  cursor: "pointer",
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderRadius: 999, padding: "5px 10px",
-                  color: "rgba(245,247,250,0.6)",
-                  fontSize: 11, fontWeight: 600,
-                }}>
-                <RefreshCw size={10} strokeWidth={2.2} />
-                Reset to property defaults
-              </button>
-            )}
-          </div>
-          <GoalsInputs inputs={inputs} onChange={handleInputs} />
-
-          {/* Horizon switch + tax bracket — shape the brick honestly to YOUR
-              numbers. Tax bracket SCALES negative-gearing refunds (a higher
-              bracket = bigger refund per dollar of loss). NG eligibility itself
-              is set by the property's build status under 2026 budget rules. */}
-          <div className="goals-horizon-row" style={{
-            display: "flex", flexWrap: "wrap", alignItems: "center",
-            gap: 18, marginBottom: 22,
-          }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-              <span style={{
-                fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
-                color: "rgba(245,247,250,0.55)", fontWeight: 700,
-              }}>I plan to hold for</span>
-              <div style={{
-                display: "inline-flex", padding: 3, gap: 2,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 999,
-              }}>
-                {[10, 20, 30].map(y => {
-                  const on = horizonYears === y;
-                  return (
-                    <button key={y} onClick={() => setHorizonYears(y)}
-                      style={{
-                        cursor: "pointer", border: "none",
-                        borderRadius: 999, padding: "7px 14px",
-                        fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
-                        background: on
-                          ? "linear-gradient(135deg, rgba(96,165,250,0.22), rgba(96,165,250,0.10))"
-                          : "transparent",
-                        color: on ? "#BFDBFE" : "rgba(245,247,250,0.55)",
-                        boxShadow: on
-                          ? "0 0 0 1px rgba(96,165,250,0.45) inset"
-                          : "none",
-                      }}>
-                      {y} years
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-              <span style={{
-                fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
-                color: "rgba(245,247,250,0.55)", fontWeight: 700,
-              }}>Tax bracket</span>
-              <div style={{
-                display: "inline-flex", padding: 3, gap: 2,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 999,
-              }}>
-                {[18, 32, 39, 47].map(b => {
-                  const on = marginalRate === b;
-                  return (
-                    <button key={b} onClick={() => setMarginalRate(b)}
-                      title={`${b}% effective (incl. 2% Medicare levy)`}
-                      style={{
-                        cursor: "pointer", border: "none",
-                        borderRadius: 999, padding: "7px 12px",
-                        fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
-                        background: on
-                          ? "linear-gradient(135deg, rgba(251,191,36,0.22), rgba(251,191,36,0.08))"
-                          : "transparent",
-                        color: on ? "#FDE68A" : "rgba(245,247,250,0.55)",
-                        boxShadow: on
-                          ? "0 0 0 1px rgba(251,191,36,0.45) inset"
-                          : "none",
-                      }}>
-                      {b}%
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-          <div style={{
-            margin: "-12px 2px 22px", fontSize: 11.5, lineHeight: 1.5,
-            color: "rgba(245,247,250,0.45)",
-          }}>
-            Brick shown is <strong style={{ color: "rgba(245,247,250,0.7)" }}>after-tax</strong> — negative gearing
-            losses are refunded at your {marginalRate}% bracket each year (where eligible under 2026 budget rules).
-          </div>
-
           {noGoals ? (
-            <div style={{
+            <div className="viz-empty" style={{
               padding: "60px 24px",
               borderRadius: 16,
               background: "rgba(255,255,255,0.025)",
               border: "1px dashed rgba(255,255,255,0.12)",
               textAlign: "center",
+              order: 2,
             }}>
               <div style={{ fontSize: 38, marginBottom: 8 }}>🎯</div>
               <div style={{
                 fontSize: 17, fontWeight: 600, color: "#F5F7FA",
                 letterSpacing: -0.01, marginBottom: 6,
               }}>
-                Pick a goal above to start
+                Pick a goal below to start
               </div>
               <div style={{
                 fontSize: 13.5, color: "rgba(245,247,250,0.55)",
@@ -949,74 +863,223 @@ export default function GoalsScreen({
             </div>
           ) : (
             <>
-              {/* Cashflow + Wealth — side by side, the two stories every buyer wants */}
-              <div className="goals-bricks-grid" style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 18, marginBottom: 24,
-              }}>
-                {/* Cashflow brick — goals as emojis */}
-                <div style={{
-                  background: "linear-gradient(180deg, rgba(251,113,133,0.06), rgba(255,255,255,0.012))",
-                  border: "1px solid rgba(251,113,133,0.18)",
-                  borderRadius: 18, padding: "20px 18px",
-                }}>
-                  <div style={{
-                    fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
-                    color: "#FB7185", marginBottom: 4,
-                  }}>30-year cashflow · what pays for your life</div>
-                  <div style={{
-                    fontFamily: 'ui-serif, Georgia, serif', fontSize: 17, fontWeight: 500,
-                    color: "#F5F7FA", letterSpacing: "-0.01em", marginBottom: 14, lineHeight: 1.25,
-                  }}>
-                    {breakEvenYear
-                      ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEvenYear}</span></>
-                      : <>Costs every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
-                  </div>
-                  <div style={{
-                    display: "flex", justifyContent: "center",
-                    paddingBottom: 60, overflowX: "auto",
-                  }}>
-                    <GoalsBrick
-                      cashflow={cashflow}
-                      achievements={achievements}
-                      breakEven={breakEvenYear}
-                      horizonYear={horizonYears}
-                      cell={13} gap={2} />
-                  </div>
+              {/* viz-charts — the heroes. On desktop both bricks side-by-side,
+                  on mobile we collapse to a single chart at a time via the
+                  Cashflow / Wealth tab toggle (rendered just above the grid). */}
+              <div className="viz-charts" style={{ order: 2, marginBottom: 22 }}>
+                <div className="goals-chart-tabs" role="tablist" aria-label="Chart">
+                  <button role="tab" aria-selected={mobileChart === "cashflow"}
+                    onClick={() => setMobileChart("cashflow")}
+                    className={mobileChart === "cashflow" ? "is-active cashflow" : "cashflow"}>
+                    <span className="dot" />Cashflow
+                  </button>
+                  <button role="tab" aria-selected={mobileChart === "wealth"}
+                    onClick={() => setMobileChart("wealth")}
+                    className={mobileChart === "wealth" ? "is-active wealth" : "wealth"}>
+                    <span className="dot" />Wealth
+                  </button>
                 </div>
-
-                {/* Wealth brick — gold heatmap */}
-                {wealthProjection && (
-                  <div style={{
-                    background: "linear-gradient(180deg, rgba(251,191,36,0.06), rgba(255,255,255,0.012))",
-                    border: "1px solid rgba(251,191,36,0.18)",
-                    borderRadius: 18, padding: "20px 18px",
-                  }}>
+                <div className="goals-bricks-grid" style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 18,
+                }}>
+                  <div className={`goals-chart-card cashflow ${mobileChart === "cashflow" ? "" : "is-mobile-hidden"}`}
+                    style={{
+                      background: "linear-gradient(180deg, rgba(251,113,133,0.06), rgba(255,255,255,0.012))",
+                      border: "1px solid rgba(251,113,133,0.18)",
+                      borderRadius: 18, padding: "20px 18px",
+                    }}>
                     <div style={{
                       fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
-                      color: "#FBBF24", marginBottom: 4,
-                    }}>30-year wealth · what you'll be worth</div>
+                      color: "#FB7185", marginBottom: 4,
+                    }}>30-year cashflow · what pays for your life</div>
                     <div style={{
                       fontFamily: 'ui-serif, Georgia, serif', fontSize: 17, fontWeight: 500,
                       color: "#F5F7FA", letterSpacing: "-0.01em", marginBottom: 14, lineHeight: 1.25,
                     }}>
-                      Equity grows to{" "}
-                      <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(equitySeries[29] || 0)}</span>
-                      {" "}by year 30
+                      {breakEvenYear
+                        ? <>Pays you from <span style={{ color: "#4ADE80" }}>year {breakEvenYear}</span></>
+                        : <>Costs every year — <span style={{ color: "#F87171" }}>never breaks even</span></>}
                     </div>
-                    <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
-                      <WealthGrid
-                        monthlyEquity={wealthProjection.monthlyEquity}
-                        loanBalance={wealthProjection.loanBalance}
-                        depositEquity={wealthProjection.depositEquity}
-                        cell={11} gap={2}
-                        showLoanStrip={false}
-                        showYearCallouts
-                      />
+                    <div style={{
+                      display: "flex", justifyContent: "center",
+                      paddingBottom: 60, overflowX: "auto",
+                    }}>
+                      <GoalsBrick
+                        cashflow={cashflow}
+                        achievements={achievements}
+                        breakEven={breakEvenYear}
+                        horizonYear={horizonYears}
+                        cell={13} gap={2} />
                     </div>
                   </div>
-                )}
+
+                  {wealthProjection && (
+                    <div className={`goals-chart-card wealth ${mobileChart === "wealth" ? "" : "is-mobile-hidden"}`}
+                      style={{
+                        background: "linear-gradient(180deg, rgba(251,191,36,0.06), rgba(255,255,255,0.012))",
+                        border: "1px solid rgba(251,191,36,0.18)",
+                        borderRadius: 18, padding: "20px 18px",
+                      }}>
+                      <div style={{
+                        fontSize: 11, fontWeight: 700, letterSpacing: 0.16, textTransform: "uppercase",
+                        color: "#FBBF24", marginBottom: 4,
+                      }}>30-year wealth · what you'll be worth</div>
+                      <div style={{
+                        fontFamily: 'ui-serif, Georgia, serif', fontSize: 17, fontWeight: 500,
+                        color: "#F5F7FA", letterSpacing: "-0.01em", marginBottom: 14, lineHeight: 1.25,
+                      }}>
+                        Equity grows to{" "}
+                        <span style={{ color: "#FBBF24" }}>{fmtMoneyShort(equitySeries[29] || 0)}</span>
+                        {" "}by year 30
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "center", overflowX: "auto" }}>
+                        <WealthGrid
+                          monthlyEquity={wealthProjection.monthlyEquity}
+                          loanBalance={wealthProjection.loanBalance}
+                          depositEquity={wealthProjection.depositEquity}
+                          cell={11} gap={2}
+                          showLoanStrip={false}
+                          showYearCallouts
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* viz-controls — the two most-tapped levers, sit DIRECTLY under
+                  the chart on mobile so adjusting them shows the magic
+                  moment without the chart leaving the screen. */}
+              <div className="viz-controls goals-horizon-row" style={{
+                display: "flex", flexWrap: "wrap", alignItems: "center",
+                gap: 18, marginBottom: 14,
+                order: 3,
+              }}>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <span style={{
+                    fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+                    color: "rgba(245,247,250,0.55)", fontWeight: 700,
+                  }}>I plan to hold for</span>
+                  <div style={{
+                    display: "inline-flex", padding: 3, gap: 2,
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 999,
+                  }}>
+                    {[10, 20, 30].map(y => {
+                      const on = horizonYears === y;
+                      return (
+                        <button key={y} onClick={() => setHorizonYears(y)}
+                          style={{
+                            cursor: "pointer", border: "none",
+                            borderRadius: 999, padding: "7px 14px",
+                            fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
+                            background: on
+                              ? "linear-gradient(135deg, rgba(96,165,250,0.22), rgba(96,165,250,0.10))"
+                              : "transparent",
+                            color: on ? "#BFDBFE" : "rgba(245,247,250,0.55)",
+                            boxShadow: on
+                              ? "0 0 0 1px rgba(96,165,250,0.45) inset"
+                              : "none",
+                          }}>
+                          {y} years
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <span style={{
+                    fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+                    color: "rgba(245,247,250,0.55)", fontWeight: 700,
+                  }}>Tax bracket</span>
+                  <div style={{
+                    display: "inline-flex", padding: 3, gap: 2,
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 999,
+                  }}>
+                    {[18, 32, 39, 47].map(b => {
+                      const on = marginalRate === b;
+                      return (
+                        <button key={b} onClick={() => setMarginalRate(b)}
+                          title={`${b}% effective (incl. 2% Medicare levy)`}
+                          style={{
+                            cursor: "pointer", border: "none",
+                            borderRadius: 999, padding: "7px 12px",
+                            fontSize: 12, fontWeight: 700, letterSpacing: -0.02,
+                            background: on
+                              ? "linear-gradient(135deg, rgba(251,191,36,0.22), rgba(251,191,36,0.08))"
+                              : "transparent",
+                            color: on ? "#FDE68A" : "rgba(245,247,250,0.55)",
+                            boxShadow: on
+                              ? "0 0 0 1px rgba(251,191,36,0.45) inset"
+                              : "none",
+                          }}>
+                          {b}%
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* viz-disclaimer — keep close to the controls so the user
+                  understands what the controls actually change. */}
+              <div className="viz-disclaimer" style={{
+                margin: "0 2px 22px", fontSize: 11.5, lineHeight: 1.5,
+                color: "rgba(245,247,250,0.45)",
+                order: 4,
+              }}>
+                Brick shown is <strong style={{ color: "rgba(245,247,250,0.7)" }}>after-tax</strong> — negative gearing
+                losses are refunded at your {marginalRate}% bracket each year (where eligible under 2026 budget rules).
+              </div>
+
+              {/* viz-assumptions — the deeper "tune" panel. Always visible
+                  on desktop; on mobile it folds behind a "Tune assumptions"
+                  toggle so the chart + horizon/bracket dominate the
+                  viewport. */}
+              <div className="viz-assumptions" style={{ order: 5, marginBottom: 22 }}>
+                <button
+                  className="goals-assumptions-toggle"
+                  onClick={() => setAssumptionsOpen(o => !o)}
+                  aria-expanded={assumptionsOpen}>
+                  <span>Tune deposit, rate, growth, build, loan</span>
+                  <ChevronDown size={14} strokeWidth={2.4}
+                    style={{
+                      transition: "transform 0.2s",
+                      transform: assumptionsOpen ? "rotate(180deg)" : "rotate(0deg)",
+                    }} />
+                </button>
+                <div className={`goals-assumptions-panel${assumptionsOpen ? " is-open" : ""}`}>
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    gap: 12, marginBottom: 8,
+                  }}>
+                    <div style={{
+                      fontSize: 11, letterSpacing: 0.18, textTransform: "uppercase",
+                      color: "rgba(245,247,250,0.55)", fontWeight: 700,
+                    }}>Your assumptions</div>
+                    {inputsTouched && (
+                      <button onClick={resetInputs}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 5,
+                          cursor: "pointer",
+                          background: "rgba(255,255,255,0.03)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          borderRadius: 999, padding: "5px 10px",
+                          color: "rgba(245,247,250,0.6)",
+                          fontSize: 11, fontWeight: 600,
+                        }}>
+                        <RefreshCw size={10} strokeWidth={2.2} />
+                        Reset to property defaults
+                      </button>
+                    )}
+                  </div>
+                  <GoalsInputs inputs={inputs} onChange={handleInputs} />
+                </div>
               </div>
 
               {/* Two distinct numbers — what you OWN (equity) and what it
@@ -1029,6 +1092,7 @@ export default function GoalsScreen({
                 display: "grid",
                 gridTemplateColumns: "repeat(2, 1fr)",
                 gap: 12, marginBottom: 4,
+                order: 6,
               }}>
                 <WealthTile
                   label={`Equity at year ${horizonYears}`}
@@ -1055,6 +1119,7 @@ export default function GoalsScreen({
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
                 gap: 16, marginTop: 16,
+                order: 7,
               }} className="goals-coverage">
                 <div style={{
                   background: "rgba(34,197,94,0.07)",
@@ -1134,6 +1199,7 @@ export default function GoalsScreen({
                   letterSpacing: "-0.01em",
                   display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8,
                   boxShadow: "0 18px 36px -12px rgba(244,63,94,0.5)",
+                  order: 8,
                 }}>
                 Open the full 30-year map for {(selectedProperty.suburb || "").split(",")[0].trim()}
                 <ArrowRight size={15} strokeWidth={2.4} />
@@ -1148,8 +1214,59 @@ export default function GoalsScreen({
         .goals-wealth-strip { grid-template-columns: repeat(2, 1fr); }
         .goals-bricks-grid { grid-template-columns: 1fr 1fr; }
         .goals-inputs-grid { grid-template-columns: repeat(5, 1fr); }
+
+        /* Chart tab toggle is hidden on desktop (both charts shown side-by-side)
+           and only appears on mobile, where one chart at a time keeps the
+           "beautiful squares" feeling like the hero of the page. */
+        .goals-chart-tabs { display: none; }
+        .goals-chart-tabs button {
+          flex: 1; cursor: pointer;
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.07);
+          border-radius: 12px; padding: 10px 14px;
+          color: rgba(245,247,250,0.55);
+          font-size: 13px; font-weight: 700;
+          letter-spacing: -0.01em;
+          display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+          font-family: inherit;
+          transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .goals-chart-tabs button .dot {
+          width: 8px; height: 8px; border-radius: 999px;
+        }
+        .goals-chart-tabs button.cashflow .dot { background: rgba(251,113,133,0.55); }
+        .goals-chart-tabs button.wealth .dot { background: rgba(251,191,36,0.55); }
+        .goals-chart-tabs button.is-active.cashflow {
+          background: linear-gradient(135deg, rgba(251,113,133,0.18), rgba(251,113,133,0.06));
+          border-color: rgba(251,113,133,0.45);
+          color: #FECDD3;
+        }
+        .goals-chart-tabs button.is-active.wealth {
+          background: linear-gradient(135deg, rgba(251,191,36,0.18), rgba(251,191,36,0.06));
+          border-color: rgba(251,191,36,0.45);
+          color: #FDE68A;
+        }
+        .goals-chart-tabs button.is-active.cashflow .dot { background: #FB7185; box-shadow: 0 0 8px rgba(251,113,133,0.7); }
+        .goals-chart-tabs button.is-active.wealth .dot { background: #FBBF24; box-shadow: 0 0 8px rgba(251,191,36,0.7); }
+
+        /* Assumptions disclosure toggle is hidden on desktop (panel always
+           open) and only shows on mobile where space is precious. */
+        .goals-assumptions-toggle { display: none; }
+        .goals-assumptions-toggle {
+          width: 100%; cursor: pointer;
+          background: rgba(255,255,255,0.025);
+          border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 12px; padding: 11px 14px;
+          color: rgba(245,247,250,0.78);
+          font-size: 12.5px; font-weight: 700;
+          letter-spacing: 0.06em; text-transform: uppercase;
+          align-items: center; justify-content: space-between;
+          font-family: inherit;
+          margin-bottom: 10px;
+        }
+
         @media (max-width: 980px) {
-          .goals-bricks-grid { grid-template-columns: 1fr; }
+          .goals-bricks-grid { grid-template-columns: 1fr; gap: 14px; }
           .goals-inputs-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 720px) {
@@ -1158,6 +1275,40 @@ export default function GoalsScreen({
           .goals-picker { width: 100%; }
           .goals-horizon-row { width: 100%; }
           .goals-inputs-grid { grid-template-columns: 1fr 1fr; }
+
+          /* Make the visualisation the hero on mobile by pushing the goals
+             editor (Step 1) below it. The chart and the most-tapped
+             controls (horizon + tax bracket) are the first thing the user
+             sees, with the deeper assumptions panel folded behind a
+             toggle so it never crowds them off the screen. */
+          .goals-editor-section { order: 4; }
+          .goals-viz-section { order: 3; }
+
+          /* Tighten the visualisation panel padding so the chart can
+             breathe full-width. */
+          .goals-viz-section { padding: 22px 14px 26px !important; border-radius: 18px !important; }
+
+          /* Show the chart toggle, hide the inactive chart card. The
+             remaining chart gets full mobile width so the squares feel
+             like the hero of the page. */
+          .goals-chart-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+          .goals-chart-card.is-mobile-hidden { display: none; }
+
+          /* Fold the deeper assumptions panel behind a "Tune…" disclosure.
+             The chart + horizon/bracket are all that's visible until the
+             user opts in to the deeper levers. */
+          .goals-assumptions-toggle { display: inline-flex; }
+          .goals-assumptions-panel:not(.is-open) { display: none; }
+
+          /* Smaller hero on mobile so the chart sits closer to the top
+             and the page doesn't open with a wall of text. */
+          .goals-hero { padding-top: 8px !important; margin-bottom: 18px !important; }
+          .goals-hero-p { font-size: 14.5px !important; }
+          .viz-h2 { font-size: 19px !important; }
+
+          /* Chart card padding tightened on mobile so the squares get
+             every horizontal pixel possible. */
+          .goals-chart-card { padding: 16px 12px !important; border-radius: 14px !important; }
         }
       `}</style>
     </motion.div>
